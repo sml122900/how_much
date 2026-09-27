@@ -7,7 +7,8 @@
     "price": 12900,
     "category": "생활·주방",
     "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p001",
-    "price_checked_at": "2026-09-27"
+    "price_checked_at": "2026-09-27",
+    "shipping": "rocket_threshold"
   },
   {
     "id": "p002",
@@ -17,7 +18,8 @@
     "price": 15800,
     "category": "생활·주방",
     "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p002",
-    "price_checked_at": "2026-09-27"
+    "price_checked_at": "2026-09-27",
+    "shipping": "seller_free"
   },
   {
     "id": "p003",
@@ -27,6 +29,7 @@
     "price": 24900,
     "category": "생활·주방",
     "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p003",
-    "price_checked_at": "2026-09-27"
+    "price_checked_at": "2026-09-27",
+    "shipping": "rocket_free"
   }
 ]

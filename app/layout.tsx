@@ -37,7 +37,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="bg-white font-sans text-gray-900 antialiased">
         <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5">
-          <main className="flex flex-1 flex-col py-6">{children}</main>
+          <main className="flex flex-1 flex-col py-3">{children}</main>
           <footer className="border-t border-gray-100 py-4">
             <Disclosure />
           </footer>

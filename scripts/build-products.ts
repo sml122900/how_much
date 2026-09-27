@@ -6,11 +6,13 @@
  *
  * 오류가 하나라도 있으면 exit 1 (JSON 안 씀).
  * 비활성(active=false)·가격 확인 14일 초과 상품은 풀에서 제외.
+ * (런타임에서도 lib/products.ts freshPool() 이 같은 기준으로 한 번 더 거른다)
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { PARTNER_LINK_HOST, PRICE_STALE_DAYS } from "../lib/config";
-import type { Product } from "../lib/types";
+import { MAX_PRICE, PARTNER_LINK_HOST, PRICE_STALE_DAYS, PRICE_UNIT } from "../lib/config";
+import { daysSince } from "../lib/freshness";
+import { SHIPPING_TYPES, type Product, type Shipping } from "../lib/types";
 
 const COLUMNS = [
   "id",
@@ -23,8 +25,12 @@ const COLUMNS = [
   "sub_id",
   "price_checked_at",
   "active",
+  "price_basis",
+  "options",
+  "shipping",
 ] as const;
 
+const OPTIONS = ["single", "default"];
 const DESCRIPTION_MAX = 40;
 // next.config.ts images.remotePatterns 와 맞춰야 함
 const IMAGE_HOST_OK = (h: string) => h.endsWith(".coupangcdn.com") || h === "ads-partners.coupang.com";
@@ -67,18 +73,6 @@ function parseCsv(text: string): string[][] {
   return rows.filter((r) => r.some((f) => f.trim() !== ""));
 }
 
-function todayLocal(): Date {
-  const d = new Date();
-  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
-}
-
-function parseYmd(s: string): Date | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
-  if (!m) return null;
-  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
-  return d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3] ? d : null;
-}
-
 function main() {
   const rows = parseCsv(readFileSync(inPath, "utf8"));
   const [header, ...body] = rows;
@@ -93,7 +87,6 @@ function main() {
   }
   const col = (r: string[], name: (typeof COLUMNS)[number]) => (r[headerNorm.indexOf(name)] ?? "").trim();
 
-  const today = todayLocal();
   const ids = new Set<string>();
   const pool: Product[] = [];
   let inactive = 0;
@@ -128,8 +121,10 @@ function main() {
 
     const priceRaw = col(r, "price");
     const price = Number(priceRaw);
-    if (!/^\d+$/.test(priceRaw) || !Number.isSafeInteger(price) || price <= 0 || price > 999_999_999)
-      err(`price 는 양의 정수(원)여야 함 "${priceRaw}"`);
+    if (!/^\d+$/.test(priceRaw) || !Number.isSafeInteger(price) || price <= 0 || price > MAX_PRICE)
+      err(`price 는 1~${MAX_PRICE.toLocaleString("ko-KR")} 사이 정수(원)여야 함 "${priceRaw}"`);
+    else if (price % PRICE_UNIT !== 0)
+      err(`price 가 ${PRICE_UNIT}원 단위가 아님 "${priceRaw}" — 일의 자리가 있는 상품은 큐레이션에서 제외`);
 
     const category = col(r, "category");
     if (!category) err("category 비어 있음");
@@ -148,17 +143,23 @@ function main() {
     if (subId !== id) err(`sub_id "${subId}" 는 id "${id}" 와 같아야 함`);
 
     const checkedAt = col(r, "price_checked_at");
-    const checked = parseYmd(checkedAt);
+    const days = daysSince(checkedAt);
     let isStale = false;
-    if (!checked) err(`price_checked_at 형식 오류 "${checkedAt}" (YYYY-MM-DD)`);
-    else {
-      const days = Math.round((today.getTime() - checked.getTime()) / 86_400_000);
-      if (days < 0) err(`price_checked_at 이 미래 날짜 "${checkedAt}"`);
-      else if (days > PRICE_STALE_DAYS) {
-        isStale = true;
-        warnings.push(`${where}: 가격 확인 ${days}일 경과 (${checkedAt}) → 풀에서 제외. 가격 재확인 필요`);
-      }
+    if (days === null) err(`price_checked_at 형식 오류 "${checkedAt}" (YYYY-MM-DD)`);
+    else if (days < 0) err(`price_checked_at 이 미래 날짜 "${checkedAt}"`);
+    else if (days > PRICE_STALE_DAYS) {
+      isStale = true;
+      warnings.push(`${where}: 가격 확인 ${days}일 경과 (${checkedAt}) → 풀에서 제외. 가격 재확인 필요`);
     }
+
+    // 구매 정직성: 비회원 기본 판매가만, 옵션 가격 일치, 배송 조건 명시
+    const priceBasis = col(r, "price_basis");
+    if (priceBasis !== "listed")
+      err(`price_basis 는 "listed" 여야 함 "${priceBasis}" (와우 회원가·카드 즉시할인·쿠폰가 금지)`);
+    const options = col(r, "options");
+    if (!OPTIONS.includes(options)) err(`options 는 single/default 중 하나 "${options}"`);
+    const shipping = col(r, "shipping") as Shipping;
+    if (!SHIPPING_TYPES.includes(shipping)) err(`shipping 은 ${SHIPPING_TYPES.join("/")} 중 하나 "${shipping}"`);
 
     const activeRaw = col(r, "active").toLowerCase();
     if (activeRaw !== "true" && activeRaw !== "false") err(`active 는 true/false "${col(r, "active")}"`);
@@ -180,6 +181,7 @@ function main() {
       category,
       partner_url: partnerUrl,
       price_checked_at: checkedAt,
+      shipping,
     });
   });
 

@@ -1,4 +1,4 @@
-id,name,description,image_url,price,category,partner_url,sub_id,price_checked_at,active
-p001,스테인리스 계량스푼 5종 세트,자석으로 붙어 서랍 속에서 흩어지지 않는 계량스푼,https://thumbnail6.coupangcdn.com/placeholder/p001.jpg,12900,생활·주방,https://link.coupang.com/a/PLACEHOLDER_p001,p001,2026-09-27,true
-p002,실리콘 주방 집게 2개입,내열 230도 실리콘 팁이라 코팅 팬도 안심,https://thumbnail6.coupangcdn.com/placeholder/p002.jpg,15800,생활·주방,https://link.coupang.com/a/PLACEHOLDER_p002,p002,2026-09-27,true
-p003,규조토 욕실 발매트,물기를 몇 초 만에 흡수하는 돌 발매트,https://thumbnail6.coupangcdn.com/placeholder/p003.jpg,24900,생활·주방,https://link.coupang.com/a/PLACEHOLDER_p003,p003,2026-09-27,true
+id,name,description,image_url,price,category,partner_url,sub_id,price_checked_at,active,price_basis,options,shipping
+p001,스테인리스 계량스푼 5종 세트,자석으로 붙어 서랍 속에서 흩어지지 않는 계량스푼,https://thumbnail6.coupangcdn.com/placeholder/p001.jpg,12900,생활·주방,https://link.coupang.com/a/PLACEHOLDER_p001,p001,2026-09-27,true,listed,single,rocket_threshold
+p002,실리콘 주방 집게 2개입,내열 230도 실리콘 팁이라 코팅 팬도 안심,https://thumbnail6.coupangcdn.com/placeholder/p002.jpg,15800,생활·주방,https://link.coupang.com/a/PLACEHOLDER_p002,p002,2026-09-27,true,listed,default,seller_free
+p003,규조토 욕실 발매트,물기를 몇 초 만에 흡수하는 돌 발매트,https://thumbnail6.coupangcdn.com/placeholder/p003.jpg,24900,생활·주방,https://link.coupang.com/a/PLACEHOLDER_p003,p003,2026-09-27,true,listed,single,rocket_free

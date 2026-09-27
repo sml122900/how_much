@@ -8,3 +8,17 @@
 html {
   -webkit-tap-highlight-color: transparent;
 }
+
+/* 드럼 스핀 중 속도감 */
+.drum-blur {
+  filter: blur(1.2px);
+}
+
+.drum-view {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 30%, #000 70%, transparent 100%);
+}
+
+@keyframes nd-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}

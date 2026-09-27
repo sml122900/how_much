@@ -1,19 +1,23 @@
 "use client";
 
-import { CTA_LABEL } from "@/lib/config";
 import { logEvent } from "@/lib/log";
+import type { ClickSource } from "@/lib/types";
 
-/** 외부 제휴 링크. 클릭은 로그만 남기고 점수와는 무관 */
+/** 외부 제휴 링크. 클릭은 로그만 남기고 점수·보상과는 무관 */
 export function PartnerLink({
   href,
   productId,
   source,
   className,
+  children,
+  onClick,
 }: {
   href: string;
   productId: string;
-  source: "reveal" | "result";
+  source: ClickSource;
   className: string;
+  children: React.ReactNode;
+  onClick?: () => void;
 }) {
   return (
     <a
@@ -21,9 +25,12 @@ export function PartnerLink({
       target="_blank"
       rel="sponsored noopener"
       className={className}
-      onClick={() => logEvent({ type: "click", product_id: productId, source })}
+      onClick={() => {
+        onClick?.();
+        logEvent({ type: "click", product_id: productId, source });
+      }}
     >
-      {CTA_LABEL}
+      {children}
     </a>
   );
 }

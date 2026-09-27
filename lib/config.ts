@@ -1,4 +1,4 @@
-export const APP_NAME = "눈대중";
+export const APP_NAME = "how_much";
 export const APP_TITLE = `${APP_NAME} — 가격 맞히기`;
 export const APP_SUBCOPY = "눈대중으로 가격 맞히기";
 
@@ -7,18 +7,22 @@ export const TOLERANCE_PCT = 15;
 export const ROUND_SIZE = 10;
 /** 문제당 최대 점수 */
 export const MAX_POINTS = 100;
-/** CHEAPER 아닐 때 자동으로 다음 문제로 넘어가는 시간 */
-export const AUTO_ADVANCE_MS = 1500;
+/** HIT만 / MISS 공개 후 자동으로 다음 문제로 넘어가는 시간 */
+export const AUTO_ADVANCE_MS = 2500;
 /** localStorage `seen`에 보관하는 최근 상품 수 */
 export const SEEN_LIMIT = 50;
-/** price_checked_at 이 이 일수를 넘으면 게임 풀에서 제외 */
+/** price_checked_at 이 이 일수를 넘으면 게임 풀에서 제외 (빌드 시 + 런타임) */
 export const PRICE_STALE_DAYS = 14;
-/** 입력 가능한 최대 자릿수 (Postgres int 범위 안) */
-export const GUESS_MAX_DIGITS = 9;
+
+/** 드럼: 십만~십 5칸 + 고정 "0" → 10원 단위, 최대 999,990원 */
+export const PRICE_UNIT = 10;
+export const MAX_PRICE = 999_990;
+
+/** 이 연속 정답 수에 도달하면 토스트 + milestone 로그 (보상은 다음 패스) */
+export const STREAK_MILESTONES = [3, 5, 10] as const;
 
 /** 제휴 링크로 허용하는 호스트 */
 export const PARTNER_LINK_HOST = "link.coupang.com";
-export const CTA_LABEL = "쿠팡에서 보기";
 
 /** 수정·축약 금지 */
 export const DISCLOSURE =
@@ -30,4 +34,5 @@ export const STORAGE_KEYS = {
   sessionId: "nd_session_id",
   bestStreak: "nd_best_streak",
   seen: "seen",
+  muted: "nd_muted",
 } as const;

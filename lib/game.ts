@@ -1,5 +1,5 @@
 import { MAX_POINTS, TOLERANCE_PCT } from "./config";
-import type { GuessResult, Product } from "./types";
+import type { GuessResult, Outcome, Product } from "./types";
 
 export function errorPct(guess: number, price: number): number {
   return (Math.abs(guess - price) / price) * 100;
@@ -28,6 +28,12 @@ export function evaluateGuess(product: Product, guess: number): GuessResult {
     cheaper: isCheaper(guess, product.price),
     points: pointsFor(guess, product.price),
   };
+}
+
+/** 점수 축(HIT)과 구매 축(CHEAPER)을 조합한 공개 연출 분기 */
+export function outcomeOf(r: Pick<GuessResult, "hit" | "cheaper">): Outcome {
+  if (r.hit) return r.cheaper ? "hit_cheaper" : "hit";
+  return r.cheaper ? "cheaper" : "miss";
 }
 
 /** "생각보다 N% 싸요" — 예상가 대비 얼마나 싼지 */
