@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { loop, play, tickSound, vibrate, type LoopHandle } from "@/lib/sfx";
+import { play, startSpinEngine, tickSound, vibrate, type SpinEngineHandle } from "@/lib/sfx";
 
 export type DrumMode = "input" | "spin" | "reveal";
 
@@ -19,25 +19,40 @@ const SPRING_C = 24;
 const INERTIA_S = 0.12;
 const MAX_FLING = 15;
 
-// 공개 정착 전용 스프링 — 입력 드럼과 같은 반작용(오버슛 후 되튕김)이지만 훨씬 빳빳하게 조여서
-// "마지막 100ms" 안에 딱 멎게 한다 (입력용 상수 그대로 쓰면 자리당 ~500ms씩 걸려 전체 타임라인이 늘어짐)
-const REVEAL_SPRING_K = 6000;
-const REVEAL_SPRING_C = 110;
+// 공개 정착("철컥" 잠금) 전용 스프링 — 오버슛이 0.2~0.25칸으로 작아서 REVEAL 상수 그대로도 120ms 안에 정착됨
+const REVEAL_SPRING_K = 7500;
+const REVEAL_SPRING_C = 123;
+// 빨리감기 때는 더 빳빳하게 (탭→마지막 정지 300ms 예산 안에 들어와야 함)
+const FF_SPRING_K = 40000;
+const FF_SPRING_C = 280;
 
-// 공개 타임라인 (ms). LOCK 후 모든 자리가 동시에 굴러가기 시작해서, 자리마다 다른
-// 길이만큼 감속하다 멈춘다 — 먼저 멈추는 자리는 짧고 빠르게, 나중 자리일수록 오래 돈다.
-// 정지 순서(j=0이 최상위 유효 자리)별 롤 지속시간. 제출 → 마지막 정지 ≤ LOCK + 마지막 값 + 스프링 정착
-const LOCK_MS = 150;
-const ROLL_DURATIONS = [250, 350, 450, 550, 650] as const;
-/** ease-out 지수. 4 이상이면 "cubic 이상" 요구를 만족하면서 막판 감속이 뚜렷해짐 */
-const ROLL_EASE_POWER = 4;
-/** 자리별 롤 거리 = 지속시간에 비례 (짧은 자리도 최소 이 칸 수는 굴러가게) */
-const ROLL_CELLS_PER_MS = 0.024;
-const ROLL_CELLS_MIN = 5;
-/** 목표 숫자까지 이 칸 수 이내로 들어오면: 블러 해제 + 틱 사운드 시작 (마지막 몇 숫자만 또렷하게) */
-const TICK_TAIL_CELLS = 3;
+// ---------- 공개 타임라인 (ms). 카지노 슬롯머신: 윈드업 → 풀스피드 → 감속 → (마지막 자리만) 애태우기 → 철컥 정착 ----------
+/** 레버를 당기는 느낌으로 살짝 역방향으로 당겼다 놓는 구간 */
+const WINDUP_MS = 90;
+const WINDUP_PULLBACK_CELLS = 0.3;
+/** 풀스피드 순항 속도 (완료조건: 45칸/초 이상) */
+const FULL_SPEED_CPS = 46;
+/** 감속 구간에서 다루는 칸 수 ("마지막 약 10칸") */
+const TAIL_CELLS = 10;
+/** 철컥 잠금 전 살짝 지나치는 정도 (1~2칸이 아니라 0.2~0.25칸) */
+const LOCK_OVERSHOOT_CELLS = 0.225;
+/** 윈드업 이후 남은 시간 중 감속(꼬리) 구간이 차지하는 비율. 나머지는 풀스피드 순항 */
+const TAIL_TIME_FRACTION = 0.35;
+const DECEL_EASE_POWER = 4;
+/** 자리(j=0이 최상위 유효 자리)별 정지 시각 = STOP_BASE_MS + j*STOP_STEP_MS */
+const STOP_BASE_MS = 900;
+const STOP_STEP_MS = 220;
+/** 마지막 자리만: 마지막 3칸을 칸당 이 시간으로 기어가며 애태움 */
+const TEASE_CELLS = 3;
+// 스펙은 "칸당 약 160ms"이면서 동시에 "+400ms 내외"도 요구하는데, 3×160=480ms는 순수 추가시간
+// 기준으로 보면 "내외" 범위를 넘는다. 총 예산(2.3초)을 맞추려 120ms로 낮춰 net +360ms에 맞춘다.
+const TEASE_CELL_MS = 120;
+/** 빨리감기: 탭 후 남은 자리들이 이 간격으로 순차 정지 */
+// 스펙은 "60ms 간격"이지만 60ms×(n-1)+정착시간이 5자리에서 300ms 예산을 넘어 45ms로 낮췄다
+const FF_STAGGER_MS = 45;
 
 const mod10 = (x: number) => ((x % 10) + 10) % 10;
+const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
 
 export function valueToDigits(value: number): number[] {
   const n = Math.floor(value / 10);
@@ -48,30 +63,69 @@ function digitsToValue(digits: number[]): number {
   return digits.reduce((acc, d) => acc * 10 + d, 0) * 10;
 }
 
+type Kind = "idle" | "drag" | "spring" | "windup" | "cruise" | "decel" | "tease";
+
 type Col = {
   p: number; // 연속 위치 (정수 = 숫자 정렬). 표시 숫자 = mod10(round(p))
-  v: number; // 칸/초 (스프링 단계에서만 씀)
-  kind: "idle" | "drag" | "spring" | "roll";
-  target: number;
-  /** "spring" 단계에서 쓸 강성·감쇠 — 입력 드럼 해제(SPRING_K/C)와 공개 정착(REVEAL_SPRING_K/C)이 다름 */
+  v: number; // 스프링 단계 속도(칸/초)
+  kind: Kind;
+  target: number; // 목표 자리(정확한 숫자와 일치하는 셀)
   springK: number;
   springC: number;
+  springActiveAt: number; // 이 시각 전에는 spring 적분을 시작하지 않음 (빨리감기 스태거용)
   digit: number;
   shown: number;
-  blurred: boolean;
-  /** roll 시작 시각(performance.now 기준) */
-  rollFrom: number;
-  /** 이 자리의 롤 지속시간(ms) */
-  rollDur: number;
-  /** 롤 시작 위치 */
-  rollStartP: number;
-  /** 롤이 끝나는 시점까지 이동할 총 거리 (목표를 살짝 지나친 오버슛 지점까지) */
-  rollDistance: number;
-  /** roll→spring 이 공개 연출의 일부라서 정착 시 onLand를 불러야 하는지 (입력 드럼 반작용과 구분) */
-  revealing: boolean;
+  revealing: boolean; // spring 정착 시 onLand를 불러야 하는 공개 연출 중인지
+  landed: boolean; // 잠금 표시용
+  speed: number; // 이번 프레임 순간 속도(칸/초) — 모션 블러 계산용
+  // windup
+  windupFrom: number;
+  windupBaseP: number;
+  // cruise
+  cruiseFrom: number;
+  cruiseDur: number;
+  cruiseStartP: number;
+  // decel (꼬리 감속, 오버슛 지점까지)
+  decelFrom: number;
+  decelDur: number;
+  decelStartP: number;
+  decelDistance: number;
+  // tease (마지막 자리 전용, 3칸을 한 칸씩)
+  teaseFrom: number;
+  teaseStep: number;
+  teaseStepFrom: number;
 };
 
 type Drag = { i: number; y0: number; p0: number; t0: number; moved: number; samples: { t: number; p: number }[] };
+
+function newCol(): Col {
+  return {
+    p: 0,
+    v: 0,
+    kind: "idle",
+    target: 0,
+    springK: SPRING_K,
+    springC: SPRING_C,
+    springActiveAt: 0,
+    digit: 0,
+    shown: 0,
+    revealing: false,
+    landed: false,
+    speed: 0,
+    windupFrom: 0,
+    windupBaseP: 0,
+    cruiseFrom: 0,
+    cruiseDur: 0,
+    cruiseStartP: 0,
+    decelFrom: 0,
+    decelDur: 0,
+    decelStartP: 0,
+    decelDistance: 0,
+    teaseFrom: 0,
+    teaseStep: 0,
+    teaseStepFrom: 0,
+  };
+}
 
 export function PriceDrum({
   mode,
@@ -81,6 +135,7 @@ export function PriceDrum({
   reducedMotion,
   onSpinEnd,
   gold = false,
+  speedScale = 1,
 }: {
   mode: DrumMode;
   value: number;
@@ -91,37 +146,32 @@ export function PriceDrum({
   onSpinEnd?: () => void;
   /** 보너스 라운드 강조색 (골드 계열) */
   gold?: boolean;
+  /** /dev/spin 확인용 재생 속도 (1 = 정상, 0.5 = 절반 속도...). 기본 1 */
+  speedScale?: number;
 }) {
   const [folded, setFolded] = useState(0);
+  const [lockedCount, setLockedCount] = useState(0);
+  const [spinning, setSpinning] = useState(false);
+  const [hint, setHint] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const flashRef = useRef<HTMLDivElement>(null);
+  const chaseRef = useRef<HTMLDivElement>(null);
   const strips = useRef<(HTMLDivElement | null)[]>([]);
   const punches = useRef<(HTMLDivElement | null)[]>([]);
   const viewports = useRef<(HTMLDivElement | null)[]>([]);
-  const cols = useRef<Col[]>(
-    Array.from({ length: COLS }, () => ({
-      p: 0,
-      v: 0,
-      kind: "idle",
-      target: 0,
-      springK: SPRING_K,
-      springC: SPRING_C,
-      digit: 0,
-      shown: 0,
-      blurred: false,
-      rollFrom: 0,
-      rollDur: 0,
-      rollStartP: 0,
-      rollDistance: 0,
-      revealing: false,
-    })),
-  );
+  const cols = useRef<Col[]>(Array.from({ length: COLS }, newCol));
   const raf = useRef(0);
   const lastFrame = useRef(0);
+  /** /dev/spin 배속 확인용 시뮬레이션 시계 — 실제 시간을 speedScale만큼 늘려서 모든 타이밍이 균일하게 느려지게 함 */
+  const simClock = useRef(0);
+  const speedScaleRef = useRef(speedScale);
+  speedScaleRef.current = speedScale;
   const drag = useRef<Drag | null>(null);
   const emitted = useRef(value);
-  const spinLoop = useRef<LoopHandle | null>(null);
+  const spinEngine = useRef<SpinEngineHandle | null>(null);
   const lastCol = useRef(COLS - 1);
+  const fastForwarded = useRef(false);
+  const firstEver = useRef(true);
 
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -130,12 +180,17 @@ export function PriceDrum({
   const onSpinEndRef = useRef(onSpinEnd);
   onSpinEndRef.current = onSpinEnd;
 
-  // ---------- 렌더 (transform만) ----------
+  // ---------- 렌더 (transform + 속도 연동 모션 블러만) ----------
 
   function paint(i: number) {
     const c = cols.current[i];
     const el = strips.current[i];
-    if (el) el.style.transform = `translate3d(0, ${(VIEW_H - ROW_H) / 2 - (10 + mod10(c.p)) * ROW_H}px, 0)`;
+    if (el) {
+      const blur = clamp(c.speed / FULL_SPEED_CPS, 0, 1);
+      const scaleY = 1 + blur * 0.15;
+      el.style.transform = `translate3d(0, ${(VIEW_H - ROW_H) / 2 - (10 + mod10(c.p)) * ROW_H}px, 0) scaleY(${scaleY})`;
+      el.style.filter = blur > 0.02 ? `blur(${(blur * 3).toFixed(2)}px)` : "";
+    }
     const shown = Math.round(c.p);
     if (shown !== c.shown) {
       c.shown = shown;
@@ -143,8 +198,8 @@ export function PriceDrum({
         tickSound();
         vibrate(8);
         emit();
-      } else if ((c.kind === "roll" || (c.kind === "spring" && c.revealing)) && Math.abs(c.target - c.p) <= TICK_TAIL_CELLS) {
-        // 공개 연출 막판 몇 자리: 속도가 느려질수록 틱 사이 간격도 자연히 벌어진다
+      } else if (c.kind === "decel") {
+        // 감속 구간 전체가 "마지막 몇 자리" — 느려질수록 틱 간격도 자연히 벌어진다
         tickSound();
       }
     }
@@ -158,24 +213,43 @@ export function PriceDrum({
     }
   }
 
-  // ---------- 물리 루프 ----------
+  // ---------- 물리/타임라인 루프 ----------
 
-  function frame(now: number) {
-    const dt = Math.min(0.032, (now - lastFrame.current) / 1000);
-    lastFrame.current = now;
+  function frame() {
+    // rAF 콜백에 넘어오는 timestamp 인자는 환경에 따라 실제 벽시계와 어긋날 수 있어(예: 일부
+    // 헤드리스/오프스크린 렌더링에서 명목상 고정 간격으로 찍혀 실제 경과 시간과 안 맞는 경우가
+    // 있었다) 직접 performance.now()를 읽어 실제 경과 시간을 쓴다.
+    // 스케줄용 시계는 짧은 프레임 드랍(수십ms) 정도는 클램프 없이 그대로 흘려보내
+    // windup/cruise/decel/tease 타이밍이 늘어지지 않게 한다. 다만 탭 전환·백그라운드 등으로
+    // rAF가 아주 오래 끊겼다 돌아온 경우(드묾)까지 그대로 반영하면 타임라인이 한 프레임에
+    // 통째로 점프해버리니 100ms로는 여전히 상한을 둔다. 스프링 적분(세부 스텝)은 별도로 더 짧게 클램프.
+    const wallNow = performance.now();
+    const rawDt = Math.min(0.1, Math.max(0, (wallNow - lastFrame.current) / 1000));
+    lastFrame.current = wallNow;
+    simClock.current += rawDt * 1000 * speedScaleRef.current;
+    const now = simClock.current;
+    const dt = Math.min(0.032, rawDt) * speedScaleRef.current;
     let active = false;
+    let totalSpeed = 0;
+    let activeCols = 0;
 
     cols.current.forEach((c, i) => {
       switch (c.kind) {
         case "spring": {
+          if (now < c.springActiveAt) {
+            active = true;
+            break;
+          }
           for (let t = dt; t > 0; t -= 0.004) {
             const h = Math.min(t, 0.004);
             c.v += (-c.springK * (c.p - c.target) - c.springC * c.v) * h;
             c.p += c.v * h;
           }
-          if (Math.abs(c.p - c.target) < 0.002 && Math.abs(c.v) < 0.02) {
+          c.speed = Math.abs(c.v);
+          if (Math.abs(c.p - c.target) < 0.001 && Math.abs(c.v) < 0.02) {
             c.p = c.target;
             c.v = 0;
+            c.speed = 0;
             c.kind = "idle";
             paint(i);
             if (c.revealing) {
@@ -185,23 +259,78 @@ export function PriceDrum({
           } else active = true;
           break;
         }
-        case "roll": {
+        case "windup": {
           active = true;
-          if (now < c.rollFrom) break;
-          const u = Math.min(1, (now - c.rollFrom) / c.rollDur);
-          const eased = 1 - (1 - u) ** ROLL_EASE_POWER; // 초반은 빠르게, 막판은 눈에 띄게 감속
-          c.p = c.rollStartP + c.rollDistance * eased;
-          // 목표(오버슛 전 정확한 숫자)까지 몇 칸 안 남으면 블러를 걷어 숫자가 읽히게 한다
-          if (c.blurred && Math.abs(c.target - c.p) <= TICK_TAIL_CELLS) {
-            c.blurred = false;
-            strips.current[i]?.classList.remove("drum-blur");
-          }
+          const u = clamp((now - c.windupFrom) / WINDUP_MS, 0, 1);
+          // 0→살짝 뒤로(사인 절반)→0 으로 복귀, 레버를 당겼다 놓는 느낌
+          c.p = c.windupBaseP - WINDUP_PULLBACK_CELLS * Math.sin(Math.PI * u);
+          c.speed = (WINDUP_PULLBACK_CELLS * Math.PI * Math.cos(Math.PI * u) * 1000) / WINDUP_MS;
           if (u >= 1) {
-            // 오버슛 지점에 도착 — 입력 드럼과 같은 반작용(스프링)으로, 다만 훨씬 빳빳하게 정착
-            c.kind = "spring";
-            c.v = 0;
-            c.springK = REVEAL_SPRING_K;
-            c.springC = REVEAL_SPRING_C;
+            c.p = c.windupBaseP;
+            c.kind = "cruise";
+          }
+          break;
+        }
+        case "cruise": {
+          active = true;
+          totalSpeed += FULL_SPEED_CPS;
+          activeCols++;
+          const el = Math.min(now - c.cruiseFrom, c.cruiseDur) / 1000;
+          c.p = c.cruiseStartP + FULL_SPEED_CPS * el;
+          c.speed = FULL_SPEED_CPS;
+          if (now - c.cruiseFrom >= c.cruiseDur) {
+            c.kind = "decel";
+            c.decelFrom = c.cruiseFrom + c.cruiseDur;
+            c.decelStartP = c.p;
+          }
+          break;
+        }
+        case "decel": {
+          active = true;
+          const u = clamp((now - c.decelFrom) / c.decelDur, 0, 1);
+          const eased = 1 - (1 - u) ** DECEL_EASE_POWER;
+          c.p = c.decelStartP + c.decelDistance * eased;
+          const inst = (c.decelDistance * DECEL_EASE_POWER * (1 - u) ** (DECEL_EASE_POWER - 1)) / (c.decelDur / 1000);
+          c.speed = Math.max(0, inst);
+          totalSpeed += c.speed;
+          activeCols++;
+          if (u >= 1) {
+            if (i === lastCol.current) {
+              c.kind = "tease";
+              c.teaseFrom = now;
+              c.teaseStep = 0;
+              c.teaseStepFrom = now;
+            } else {
+              c.kind = "spring";
+              c.springActiveAt = 0;
+              c.springK = REVEAL_SPRING_K;
+              c.springC = REVEAL_SPRING_C;
+            }
+          }
+          break;
+        }
+        case "tease": {
+          active = true;
+          activeCols++;
+          const stepU = clamp((now - c.teaseStepFrom) / TEASE_CELL_MS, 0, 1);
+          const stepStart = c.target - TEASE_CELLS + c.teaseStep;
+          // 마지막 칸만 살짝 지나쳐서(overshoot) 정착 스프링이 되튕길 여지를 남긴다
+          const stepEnd = c.teaseStep === TEASE_CELLS - 1 ? c.target + LOCK_OVERSHOOT_CELLS : stepStart + 1;
+          const eased = 1 - (1 - stepU) ** 2;
+          c.p = stepStart + (stepEnd - stepStart) * eased;
+          c.speed = (stepEnd - stepStart) / (TEASE_CELL_MS / 1000);
+          totalSpeed += c.speed;
+          if (stepU >= 1) {
+            play("tick", { gain: 0.75, rate: 1 + c.teaseStep * 0.18 });
+            vibrate(10);
+            c.teaseStep++;
+            c.teaseStepFrom = now;
+            if (c.teaseStep >= TEASE_CELLS) {
+              c.kind = "spring";
+              c.springActiveAt = 0;
+              c.springK = REVEAL_SPRING_K;
+              c.springC = REVEAL_SPRING_C;
+            }
           }
           break;
         }
@@ -209,6 +338,7 @@ export function PriceDrum({
       paint(i);
     });
 
+    spinEngine.current?.update(activeCols > 0 ? totalSpeed / activeCols : 0, activeCols);
     raf.current = active ? requestAnimationFrame(frame) : 0;
   }
 
@@ -225,6 +355,7 @@ export function PriceDrum({
     c.v = v;
     c.springK = SPRING_K;
     c.springC = SPRING_C;
+    c.springActiveAt = 0;
     kick();
   }
 
@@ -239,7 +370,7 @@ export function PriceDrum({
 
   function onLand(i: number) {
     const isLast = i === lastCol.current;
-    strips.current[i]?.classList.remove("drum-blur");
+    setLockedCount((n) => n + 1);
     punches.current[i]?.animate(
       [{ transform: `scale(${isLast ? 1.55 : 1.35})` }, { transform: "scale(1)" }],
       { duration: 120, easing: "ease-out" },
@@ -255,35 +386,64 @@ export function PriceDrum({
       { duration: 80 },
     );
     play("stop", { gain: isLast ? 1 : 0.8 });
+    vibrate(15);
+    chaseRef.current?.animate([{ filter: "brightness(2.2)" }, { filter: "brightness(1)" }], {
+      duration: 150,
+      easing: "ease-out",
+    });
     if (isLast) {
       play("boom", { rate: 0.55 });
-      spinLoop.current?.stop();
-      spinLoop.current = null;
+      spinEngine.current?.stop();
+      spinEngine.current = null;
+      setSpinning(false);
       onSpinEndRef.current?.();
     }
   }
 
+  /** 스핀 도중 탭 → 남은 자리 전부 짧게 순차 정지 (간격 60ms) */
+  function fastForward() {
+    if (fastForwarded.current) return;
+    fastForwarded.current = true;
+    const now = simClock.current;
+    let k = 0;
+    cols.current.forEach((c, i) => {
+      if (i < folded || c.kind === "idle") return;
+      // 남은 자리는 오버슛 없이 목표 숫자로 바로(빳빳한 스프링으로) 정착 — 순서대로 스태거를 두고 시작
+      const delay = k * FF_STAGGER_MS;
+      k++;
+      c.kind = "spring";
+      c.springActiveAt = now + delay;
+      c.springK = FF_SPRING_K;
+      c.springC = FF_SPRING_C;
+      c.revealing = true;
+    });
+    setHint(false);
+    kick();
+  }
+
   function startSpin(price: number) {
-    const now = performance.now();
+    const now = simClock.current;
     const digits = valueToDigits(price);
     const lead = Math.max(0, digits.findIndex((d) => d > 0));
     lastCol.current = COLS - 1;
+    fastForwarded.current = false;
+    setLockedCount(0);
 
-    // 1. 예상가로 고정 + 번쩍 + 잠금음. 앞자리 0 컬럼은 이때 접는다
     cols.current.forEach((c, i) => {
       c.p = Math.round(c.p);
       c.v = 0;
       c.kind = "idle";
       c.shown = c.p;
       c.digit = digits[i];
+      c.speed = 0;
+      c.landed = false;
       paint(i);
     });
     setFolded(lead);
-    flashRef.current?.animate([{ opacity: 0.9 }, { opacity: 0 }], { duration: LOCK_MS, easing: "ease-out" });
+    flashRef.current?.animate([{ opacity: 0.9 }, { opacity: 0 }], { duration: 150, easing: "ease-out" });
     play("lock");
 
     if (reducedMotion) {
-      // 스핀·펀치·흔들림 없이 페이드 공개
       setTimeout(() => {
         cols.current.forEach((c, i) => {
           c.p = c.digit;
@@ -293,34 +453,49 @@ export function PriceDrum({
         rootRef.current?.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: "ease-out" });
         play("stop");
         onSpinEndRef.current?.();
-      }, LOCK_MS);
+      }, 150);
       return;
     }
 
-    // 2. 모든 자리가 동시에 구르기 시작 → 3. 자리마다 다른 길이로 감속하며 왼쪽부터 정지
+    setSpinning(true);
+    if (firstEver.current) {
+      firstEver.current = false;
+      setHint(true);
+      setTimeout(() => setHint(false), 1500);
+    }
+
     cols.current.forEach((c, i) => {
       if (i < lead) return;
       const j = i - lead;
-      const dur = ROLL_DURATIONS[Math.min(j, ROLL_DURATIONS.length - 1)];
-      const cells = Math.max(ROLL_CELLS_MIN, Math.round(dur * ROLL_CELLS_PER_MS));
-      const overshoot = 1 + (j % 2); // 1~2칸 오버슛, 자리마다 번갈아 살짝 다르게
+      const stopAt = STOP_BASE_MS + j * STOP_STEP_MS;
+      const availableMs = stopAt - WINDUP_MS;
+      const decelDur = Math.max(200, availableMs * TAIL_TIME_FRACTION);
+      const cruiseDur = availableMs - decelDur;
+      const cruiseCells = (FULL_SPEED_CPS * cruiseDur) / 1000;
       const startP = Math.round(c.p);
-      const base = Math.ceil(startP + cells); // 최소 cells칸은 굴러가게
-      const finalPos = base + mod10(c.digit - base); // 목표 숫자와 일치하는 첫 칸
+      const distance = cruiseCells + TAIL_CELLS; // 윈드업 복귀 지점부터 오버슛 지점까지 총 이동
+      const base = Math.ceil(startP + distance - LOCK_OVERSHOOT_CELLS); // 오버슛 전 정확한 목표 셀
+      const finalPos = base + mod10(c.digit - base);
 
-      c.kind = "roll";
-      c.blurred = true;
-      c.revealing = true;
-      c.rollFrom = now + LOCK_MS;
-      c.rollDur = dur;
-      c.rollStartP = startP;
-      c.rollDistance = finalPos + overshoot - startP;
+      c.kind = "windup";
+      c.windupFrom = now;
+      c.windupBaseP = startP;
+      c.cruiseFrom = now + WINDUP_MS;
+      c.cruiseDur = cruiseDur;
+      c.cruiseStartP = startP;
+      c.decelDur = decelDur;
       c.target = finalPos;
-      strips.current[i]?.classList.add("drum-blur");
+      c.revealing = true;
+      if (i === lastCol.current) {
+        // 마지막 자리: 감속은 애태우기 시작점(목표-3칸)까지만 — 여기서 이어받아 기어가므로 되돌아가는 점프가 없다.
+        // 애태우기(+TEASE_CELLS×TEASE_CELL_MS)가 스펙의 "추가 400ms 내외"에 해당
+        c.decelDistance = finalPos - TEASE_CELLS - startP - cruiseCells;
+      } else {
+        c.decelDistance = finalPos + LOCK_OVERSHOOT_CELLS - startP - cruiseCells;
+      }
     });
-    setTimeout(() => {
-      if (modeRef.current === "spin") spinLoop.current = loop("spin", { gain: 0.7, rate: 1.4 });
-    }, LOCK_MS);
+
+    spinEngine.current = startSpinEngine();
     kick();
   }
 
@@ -330,7 +505,7 @@ export function PriceDrum({
     cols.current.forEach((_, i) => paint(i));
     return () => {
       cancelAnimationFrame(raf.current);
-      spinLoop.current?.stop();
+      spinEngine.current?.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -351,6 +526,15 @@ export function PriceDrum({
     if (mode === "spin" && target !== undefined) startSpin(target);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
+
+  // 스핀 중 화면 아무 곳이나 탭하면 빨리감기
+  useEffect(() => {
+    if (!spinning) return;
+    const onTap = () => fastForward();
+    window.addEventListener("pointerdown", onTap, { capture: true });
+    return () => window.removeEventListener("pointerdown", onTap, { capture: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spinning]);
 
   // 휠: passive 리스너로는 스크롤을 막을 수 없어 직접 등록
   useEffect(() => {
@@ -373,7 +557,7 @@ export function PriceDrum({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---------- 포인터 ----------
+  // ---------- 포인터 (입력 모드) ----------
 
   function onPointerDown(e: React.PointerEvent<HTMLDivElement>, i: number) {
     if (modeRef.current !== "input" || drag.current) return;
@@ -404,7 +588,6 @@ export function PriceDrum({
     const c = cols.current[i];
 
     if (d.moved < 6 && performance.now() - d.t0 < 300) {
-      // 탭: 위 칸이면 −1, 아래 칸이면 +1
       const y = e.clientY - e.currentTarget.getBoundingClientRect().top;
       const delta = y < ROW_H ? -1 : y > ROW_H * 2 ? 1 : 0;
       springTo(i, Math.round(c.p) + delta);
@@ -431,78 +614,101 @@ export function PriceDrum({
   const interactive = mode === "input";
 
   return (
-    <div ref={rootRef} className="relative mx-auto flex select-none items-center justify-center">
-      {Array.from({ length: COLS }, (_, i) => (
-        <div key={i} className="flex items-center">
-          <div
-            className={`transition-[width,opacity] duration-150 ease-out ${i < folded ? "overflow-hidden" : "overflow-visible"}`}
-            style={{ width: i < folded ? 0 : 46, opacity: i < folded ? 0 : 1 }}
-          >
-            <div ref={(el) => void (punches.current[i] = el)} className="origin-center">
-              <div
-                ref={(el) => void (viewports.current[i] = el)}
-                role="spinbutton"
-                aria-label={`${PLACE_LABELS[i]} 자리`}
-                aria-valuemin={0}
-                aria-valuemax={9}
-                aria-valuenow={digitsNow[i]}
-                aria-disabled={!interactive}
-                tabIndex={interactive && i >= folded ? 0 : -1}
-                className={`drum-view relative mx-0.5 overflow-hidden rounded-xl outline-none focus-visible:ring-2 ${
-                  gold ? "bg-amber-100 focus-visible:ring-amber-500" : "bg-gray-100 focus-visible:ring-gray-900"
-                } ${interactive ? "cursor-grab touch-none active:cursor-grabbing" : ""}`}
-                style={{ height: VIEW_H }}
-                onPointerDown={(e) => onPointerDown(e, i)}
-                onPointerMove={(e) => onPointerMove(e, i)}
-                onPointerUp={(e) => onPointerUp(e, i)}
-                onPointerCancel={(e) => onPointerUp(e, i)}
-                onKeyDown={(e) => onKeyDown(e, i)}
-              >
+    <div ref={rootRef} className="relative mx-auto select-none">
+      {spinning && (
+        <div ref={chaseRef} className={`chase-lights ${gold ? "chase-gold" : ""}`} aria-hidden>
+          {Array.from({ length: 16 }, (_, k) => (
+            <span
+              key={k}
+              style={{ animationDelay: `${(k / 16) * 0.8}s`, offsetDistance: `${(k / 16) * 100}%` } as React.CSSProperties}
+            />
+          ))}
+        </div>
+      )}
+      <div className="flex items-center justify-center">
+        {Array.from({ length: COLS }, (_, i) => (
+          <div key={i} className="flex items-center">
+            <div
+              className={`transition-[width,opacity] duration-150 ease-out ${i < folded ? "overflow-hidden" : "overflow-visible"}`}
+              style={{ width: i < folded ? 0 : 46, opacity: i < folded ? 0 : 1 }}
+            >
+              <div ref={(el) => void (punches.current[i] = el)} className="origin-center">
                 <div
-                  className={`pointer-events-none absolute inset-x-0 rounded-lg shadow-sm ${gold ? "bg-amber-50" : "bg-white"}`}
-                  style={{ top: ROW_H, height: ROW_H }}
-                />
-                <div ref={(el) => void (strips.current[i] = el)} className="relative will-change-transform">
-                  {Array.from({ length: 10 * REPEAT }, (_, k) => (
-                    <div
-                      key={k}
-                      className={`flex items-center justify-center text-[32px] font-black tabular-nums ${gold ? "text-amber-900" : "text-gray-900"}`}
-                      style={{ height: ROW_H }}
-                    >
-                      {k % 10}
-                    </div>
-                  ))}
+                  ref={(el) => void (viewports.current[i] = el)}
+                  role="spinbutton"
+                  aria-label={`${PLACE_LABELS[i]} 자리`}
+                  aria-valuemin={0}
+                  aria-valuemax={9}
+                  aria-valuenow={digitsNow[i]}
+                  aria-disabled={!interactive}
+                  tabIndex={interactive && i >= folded ? 0 : -1}
+                  className={`drum-view relative mx-0.5 overflow-hidden rounded-xl outline-none transition-shadow focus-visible:ring-2 ${
+                    gold ? "bg-amber-100 focus-visible:ring-amber-500" : "bg-gray-100 focus-visible:ring-gray-900"
+                  } ${interactive ? "cursor-grab touch-none active:cursor-grabbing" : ""} ${
+                    cols.current[i]?.kind === "idle" && spinning && i >= folded
+                      ? gold
+                        ? "ring-2 ring-amber-400 brightness-105"
+                        : "ring-2 ring-gray-900/70 brightness-105"
+                      : ""
+                  }`}
+                  style={{ height: VIEW_H }}
+                  onPointerDown={(e) => onPointerDown(e, i)}
+                  onPointerMove={(e) => onPointerMove(e, i)}
+                  onPointerUp={(e) => onPointerUp(e, i)}
+                  onPointerCancel={(e) => onPointerUp(e, i)}
+                  onKeyDown={(e) => onKeyDown(e, i)}
+                >
+                  <div className="drum-mask pointer-events-none absolute inset-0" />
+                  <div
+                    className={`payline pointer-events-none absolute inset-x-0 rounded-lg shadow-sm ${gold ? "bg-amber-50" : "bg-white"} ${spinning ? "payline-lit" : ""}`}
+                    style={{ top: ROW_H, height: ROW_H }}
+                  />
+                  <div ref={(el) => void (strips.current[i] = el)} className="relative will-change-transform">
+                    {Array.from({ length: 10 * REPEAT }, (_, k) => (
+                      <div
+                        key={k}
+                        className={`flex items-center justify-center text-[32px] font-black tabular-nums ${gold ? "text-amber-900" : "text-gray-900"}`}
+                        style={{ height: ROW_H }}
+                      >
+                        {k % 10}
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
+            {i === 2 && (
+              <span
+                className={`w-2 self-end pb-11 text-2xl font-black transition-opacity duration-150 ${gold ? "text-amber-400" : "text-gray-400"}`}
+                style={{ opacity: folded > 2 ? 0 : 1, width: folded > 2 ? 0 : undefined }}
+              >
+                ,
+              </span>
+            )}
           </div>
-          {i === 2 && (
-            <span
-              className={`w-2 self-end pb-11 text-2xl font-black transition-opacity duration-150 ${gold ? "text-amber-400" : "text-gray-400"}`}
-              style={{ opacity: folded > 2 ? 0 : 1, width: folded > 2 ? 0 : undefined }}
-            >
-              ,
-            </span>
-          )}
+        ))}
+        <div className={`relative mx-0.5 w-[46px] rounded-xl ${gold ? "bg-amber-100" : "bg-gray-100"}`} style={{ height: VIEW_H }} aria-hidden>
+          <div
+            className={`absolute inset-x-0 flex items-center justify-center rounded-lg text-[32px] font-black tabular-nums shadow-sm ${
+              gold ? "bg-amber-50 text-amber-400" : "bg-white text-gray-400"
+            }`}
+            style={{ top: ROW_H, height: ROW_H }}
+          >
+            0
+          </div>
         </div>
-      ))}
-      <div className={`relative mx-0.5 w-[46px] rounded-xl ${gold ? "bg-amber-100" : "bg-gray-100"}`} style={{ height: VIEW_H }} aria-hidden>
+        <span className={`ml-1.5 text-2xl font-bold ${gold ? "text-amber-600" : "text-gray-500"}`}>원</span>
         <div
-          className={`absolute inset-x-0 flex items-center justify-center rounded-lg text-[32px] font-black tabular-nums shadow-sm ${
-            gold ? "bg-amber-50 text-amber-400" : "bg-white text-gray-400"
+          className={`pointer-events-none absolute inset-0 rounded-xl opacity-0 ${
+            gold ? "bg-amber-300/50 ring-4 ring-amber-400" : "bg-amber-200/50 ring-4 ring-amber-300"
           }`}
-          style={{ top: ROW_H, height: ROW_H }}
-        >
-          0
-        </div>
+          ref={flashRef}
+        />
       </div>
-      <span className={`ml-1.5 text-2xl font-bold ${gold ? "text-amber-600" : "text-gray-500"}`}>원</span>
-      <div
-        className={`pointer-events-none absolute inset-0 rounded-xl opacity-0 ${
-          gold ? "bg-amber-300/50 ring-4 ring-amber-400" : "bg-amber-200/50 ring-4 ring-amber-300"
-        }`}
-        ref={flashRef}
-      />
+      {hint && <p className="mt-1.5 text-center text-[11px] text-gray-400">탭하면 바로 공개</p>}
+      {lockedCount > 0 && lockedCount < COLS - folded && (
+        <p className="mt-1 text-center text-[11px] text-gray-400">{lockedCount}자리 확정</p>
+      )}
     </div>
   );
 }

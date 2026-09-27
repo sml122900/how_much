@@ -91,12 +91,64 @@ export function play(name: SfxName, opts: PlayOptions = {}) {
   node?.src.start(ctx!.currentTime + (opts.delay ?? 0));
 }
 
-/** 드럼 틱. 빠르게 굴려도 소리가 뭉개지지 않게 간격 제한 */
-export function tickSound() {
+/** 드럼 틱. 빠르게 굴려도 소리가 뭉개지지 않게 간격 제한. rate로 음높이 조절(애태우기 구간에서 점점 올림) */
+export function tickSound(rate = 1) {
   const now = performance.now();
   if (now - lastTick < 28) return;
   lastTick = now;
-  play("tick", { gain: 0.6 });
+  play("tick", { gain: 0.6, rate });
+}
+
+// ---------- 스핀 엔진: 합성 노이즈 루프, 속도에 실시간 연동 ----------
+// assets/sfx 에 있는 루프 소스는 회전 속도에 맞춰 실시간으로 피치/볼륨을 바꾸기 어려워서(길이가 고정된
+// 샘플이라 재생 위치별 음색이 다름), Web Audio로 화이트노이즈 + 대역통과 필터를 직접 만들어 쓴다.
+// 필터 중심 주파수를 속도에 연동해 "빠를수록 쐐애액 하고 높아지는" 효과를 낸다.
+export type SpinEngineHandle = {
+  /** cellsPerSec: 지금 돌고 있는 자리들의 평균 속도. activeCols: 아직 안 멈춘 자리 수 */
+  update: (cellsPerSec: number, activeCols: number) => void;
+  stop: () => void;
+};
+
+function makeNoiseBuffer(c: AudioContext): AudioBuffer {
+  const buf = c.createBuffer(1, c.sampleRate * 2, c.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+  return buf;
+}
+
+export function startSpinEngine(): SpinEngineHandle {
+  const c = ensureContext();
+  if (!c || !master || muted) return { update: () => {}, stop: () => {} };
+
+  const src = c.createBufferSource();
+  src.buffer = makeNoiseBuffer(c);
+  src.loop = true;
+  const filter = c.createBiquadFilter();
+  filter.type = "bandpass";
+  filter.Q.value = 0.9;
+  filter.frequency.value = 150;
+  const gain = c.createGain();
+  gain.gain.value = 0;
+  src.connect(filter).connect(gain).connect(master);
+  src.start();
+
+  let stopped = false;
+  return {
+    update(cellsPerSec, activeCols) {
+      if (stopped || !ctx) return;
+      const speedNorm = Math.max(0, Math.min(1, cellsPerSec / 46));
+      const t = ctx.currentTime;
+      filter.frequency.setTargetAtTime(150 + speedNorm * 700, t, 0.03);
+      const vol = activeCols > 0 ? 0.12 + speedNorm * 0.3 + Math.min(activeCols, 5) * 0.02 : 0;
+      gain.gain.setTargetAtTime(vol, t, 0.05);
+    },
+    stop() {
+      if (stopped || !ctx) return;
+      stopped = true;
+      gain.gain.setTargetAtTime(0, ctx.currentTime, 0.04);
+      src.stop(ctx.currentTime + 0.15);
+    },
+  };
 }
 
 export function loop(name: SfxName, opts: PlayOptions = {}): LoopHandle {

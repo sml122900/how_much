@@ -9,16 +9,75 @@ html {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* 드럼 스핀 중 속도감 */
-.drum-blur {
-  filter: blur(1.2px);
-}
-
+/* 드럼 창 위아래 가장자리를 부드럽게 자르는 크롭 마스크 */
 .drum-view {
   mask-image: linear-gradient(to bottom, transparent 0, #000 30%, #000 70%, transparent 100%);
 }
 
+/* 원통 착시: 가장자리를 어둡게, 가운데(숫자가 읽히는 줄)만 밝게 */
+.drum-mask {
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.35) 0%,
+    rgba(0, 0, 0, 0.08) 28%,
+    rgba(0, 0, 0, 0) 42%,
+    rgba(0, 0, 0, 0) 58%,
+    rgba(0, 0, 0, 0.08) 72%,
+    rgba(0, 0, 0, 0.35) 100%
+  );
+  z-index: 2;
+}
+
+/* 페이라인: 스핀 중에는 은은하게 빛나는 가로줄 */
+.payline {
+  transition: box-shadow 0.2s ease-out;
+}
+.payline-lit {
+  box-shadow: 0 0 6px 1px rgba(251, 191, 36, 0.55);
+}
+
+/* 머신 프레임 체이싱 라이트 */
+.chase-lights {
+  position: absolute;
+  inset: -7px;
+  z-index: 5;
+}
+.chase-lights span {
+  position: absolute;
+  inset: 0;
+  width: 5px;
+  height: 5px;
+  margin: -2.5px;
+  border-radius: 999px;
+  background: #f59e0b;
+  box-shadow: 0 0 5px 1.5px rgba(245, 158, 11, 0.65);
+  offset-path: inset(0 round 18px);
+  opacity: 0.2;
+  animation: chase-pulse 0.8s linear infinite;
+}
+.chase-lights.chase-gold span {
+  background: #fde68a;
+  box-shadow: 0 0 5px 1.5px rgba(253, 230, 138, 0.75);
+}
+
+@keyframes chase-pulse {
+  0%,
+  82%,
+  100% {
+    opacity: 0.18;
+    transform: scale(0.75);
+  }
+  8% {
+    opacity: 1;
+    transform: scale(1.3);
+  }
+}
+
 @keyframes nd-countdown {
-  from { transform: scaleX(1); }
-  to { transform: scaleX(0); }
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
 }
