@@ -12,6 +12,21 @@ npm run dev              # http://localhost:3000
 - 게임 규칙 상수(허용 오차, 문제 수, 자동 넘김 시간, 보상 임계값 등): `lib/config.ts`
 - 화면 문구("정답!", "생각보다 N% 싸요", 칭호, 보너스·광고 제거 안내 등): `lib/copy.ts`
 
+## 출시 체크리스트
+
+1. `data/products.csv` 채우기 → `npm run build:products`
+2. Supabase SQL Editor에 `supabase/all_migrations.sql` 실행 → `npm run verify:supabase`
+3. `npm run preflight` (통과하면 마지막에 `npm run build` 까지 자동으로 돌아간다)
+4. Vercel에 env 설정 후 배포 (아래 "2. Supabase", "3. 광고" 섹션의 변수들)
+5. **iPhone Safari 실기기**에서 확인: 첫 탭 후 소리·진동이 나오는지, 음소거 토글, 골드 드럼(보너스 라운드) 대비,
+   iPhone SE 높이에서 레이아웃이 잘리지 않는지
+6. 파트너스 센터에 배포 URL을 활동 채널로 등록
+7. (애드센스 신청 시) **자동 광고(Auto ads)는 반드시 꺼둘 것** — 켜져 있으면 공개 화면·구매 CTA 근처에도
+   구글이 자체적으로 광고를 끼워 넣을 수 있어 정책 위반이자 제휴 클릭 잠식으로 이어진다. 수동 슬롯 2개(시작·결과 하단)만 쓴다
+8. **2주마다**: 로그아웃 상태에서 가격 재확인 → `price_checked_at` 갱신 → `npm run build:products` → 재배포
+
+`npm run verify:supabase`, `npm run preflight` 모두 필요한 환경변수가 없으면 무엇을 채워야 하는지 알려주고 exit 1로 멈춘다.
+
 ## 판정과 공개 연출
 
 점수 축과 구매 축은 독립이다.
@@ -105,7 +120,8 @@ npm run dev              # http://localhost:3000
 env가 없으면 `/api/log` 는 204만 반환하고 아무것도 저장하지 않는다. 앱은 그대로 동작한다.
 
 1. Supabase 프로젝트 생성
-2. SQL Editor에서 `supabase/migrations/` 의 파일을 **이름 순서대로** 실행 (또는 `supabase link` → `supabase db push`)
+2. SQL Editor에서 `supabase/all_migrations.sql` 을 실행한다
+   (`supabase/migrations/` 의 3개 파일을 순서대로 이어붙인 것뿐, 개별 파일을 `supabase db push` 로 적용해도 된다)
    - `guesses`(round_type: `main` / `bonus`), `clicks`(source: `reveal` / `reveal_gray` / `result` / `result_rest`),
      `milestones`(reward: `title` / `bonus_unlock` / `ad_free`)
    - RLS 활성화, anon 정책 없음 → 클라이언트에서 직접 접근 불가
@@ -116,6 +132,10 @@ SUPABASE_URL=https://xxxx.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=...        # 서버 전용. NEXT_PUBLIC_ 붙이지 말 것
 NEXT_PUBLIC_SITE_URL=https://...     # 공유 문구에 들어갈 URL (없으면 접속 도메인)
 ```
+
+4. `npm run verify:supabase` 로 테이블·컬럼이 다 있는지, 실제로 쓰고 지울 수 있는지, (선택) anon key로는
+   insert가 막히는지 확인한다. 결과를 표로 보여주고 하나라도 실패하면 exit 1. `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+   를 채워두면 RLS 검증까지 같이 한다 (`.env.example` 참고)
 
 서버는 가격·정답 여부·오차를 클라이언트 값이 아니라 `products.json` 기준으로 다시 계산해 저장한다.
 
@@ -136,12 +156,22 @@ NEXT_PUBLIC_AD_SLOT_RESULT=2222222222      # 결과 화면 하단, 이득 목록
 - 스트릭 10 보상으로 광고 제거가 활성 중이면 `ADS_ENABLED=true` 여도 광고를 그리지 않는다.
 - **실제 애드센스 계정에서 "자동 광고(Auto ads)"는 꺼두는 것을 권장한다.** 테스트 중 확인한 바로는, 자동 광고가 켜져 있으면 우리가 배치하지 않은 화면에도 구글 스크립트가 자체적으로 광고 요소를 끼워 넣을 수 있어 — 문제/공개 화면 근처에 광고를 두지 않는다는 원칙이 우리 코드 밖에서 깨질 수 있다.
 
-## 4. 배포 (Vercel)
+## 4. 배포 전 점검 (`npm run preflight`) · Vercel
+
+`npm run preflight` 는 아래를 확인하고 하나라도 실패하면 **빌드를 실행하지 않고** exit 1로 멈춘다 (Supabase는 다루지 않음, 그건 위의 `verify:supabase`):
+
+- 상품 풀 크기(전체 20개, 하드 5개 미만이면 경고만 하고 계속 진행)
+- 제휴 링크에 `PLACEHOLDER` 가 남아 있으면 실패
+- `NEXT_PUBLIC_SITE_URL` 미설정 시 실패
+- `/privacy` 에 이메일 자리표시자가 남아 있으면 실패
+- `NEXT_PUBLIC_ADS_ENABLED=true` 인데 클라이언트·슬롯 ID가 비어 있으면 실패
+
+모두 통과하면 이어서 `npm run build` 까지 자동으로 실행한다.
 
 1. GitHub에 push → Vercel에서 Import (Framework: Next.js, 설정 기본값)
 2. Environment Variables에 Supabase 3개(선택) + 광고 4개(선택) 입력
 3. Deploy. 커스텀 도메인을 붙이면 `NEXT_PUBLIC_SITE_URL` 도 그 도메인으로 바꾸고 재배포
-4. 상품 갱신은 CSV 수정 → `npm run build:products` → 커밋·push
+4. 상품 갱신은 CSV 수정 → `npm run build:products` → `npm run preflight` → 커밋·push
 
 ## 5. 소개·개인정보 처리방침 (`/about`, `/privacy`)
 
@@ -207,5 +237,8 @@ lib/freshness.ts           가격 확인일 14일 판정 (빌드 스크립트·�
 lib/sfx.ts                 Web Audio 효과음·음소거
 lib/storage.ts             localStorage (session_id, best streak, seen)
 scripts/build-products.ts  CSV 검증 → products.json
-supabase/migrations/       SQL (이름 순서대로 적용)
+scripts/verify-supabase.ts Supabase 스키마·읽기/쓰기·RLS 확인 (npm run verify:supabase)
+scripts/preflight.ts       배포 전 점검 + npm run build (npm run preflight)
+supabase/migrations/       SQL, 개별 적용용 (이름 순서대로)
+supabase/all_migrations.sql 위 파일들을 합친 것, SQL Editor에 한 번에 붙여넣을 때
 ```
