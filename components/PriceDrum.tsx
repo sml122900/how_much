@@ -59,6 +59,7 @@ export function PriceDrum({
   target,
   reducedMotion,
   onSpinEnd,
+  gold = false,
 }: {
   mode: DrumMode;
   value: number;
@@ -67,6 +68,8 @@ export function PriceDrum({
   target?: number;
   reducedMotion: boolean;
   onSpinEnd?: () => void;
+  /** 보너스 라운드 강조색 (골드 계열) */
+  gold?: boolean;
 }) {
   const [folded, setFolded] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -406,9 +409,9 @@ export function PriceDrum({
                 aria-valuenow={digitsNow[i]}
                 aria-disabled={!interactive}
                 tabIndex={interactive && i >= folded ? 0 : -1}
-                className={`drum-view relative mx-0.5 overflow-hidden rounded-xl bg-gray-100 outline-none focus-visible:ring-2 focus-visible:ring-gray-900 ${
-                  interactive ? "cursor-grab touch-none active:cursor-grabbing" : ""
-                }`}
+                className={`drum-view relative mx-0.5 overflow-hidden rounded-xl outline-none focus-visible:ring-2 ${
+                  gold ? "bg-amber-100 focus-visible:ring-amber-500" : "bg-gray-100 focus-visible:ring-gray-900"
+                } ${interactive ? "cursor-grab touch-none active:cursor-grabbing" : ""}`}
                 style={{ height: VIEW_H }}
                 onPointerDown={(e) => onPointerDown(e, i)}
                 onPointerMove={(e) => onPointerMove(e, i)}
@@ -416,12 +419,15 @@ export function PriceDrum({
                 onPointerCancel={(e) => onPointerUp(e, i)}
                 onKeyDown={(e) => onKeyDown(e, i)}
               >
-                <div className="pointer-events-none absolute inset-x-0 rounded-lg bg-white shadow-sm" style={{ top: ROW_H, height: ROW_H }} />
+                <div
+                  className={`pointer-events-none absolute inset-x-0 rounded-lg shadow-sm ${gold ? "bg-amber-50" : "bg-white"}`}
+                  style={{ top: ROW_H, height: ROW_H }}
+                />
                 <div ref={(el) => void (strips.current[i] = el)} className="relative will-change-transform">
                   {Array.from({ length: 10 * REPEAT }, (_, k) => (
                     <div
                       key={k}
-                      className="flex items-center justify-center text-[32px] font-black tabular-nums text-gray-900"
+                      className={`flex items-center justify-center text-[32px] font-black tabular-nums ${gold ? "text-amber-900" : "text-gray-900"}`}
                       style={{ height: ROW_H }}
                     >
                       {k % 10}
@@ -433,7 +439,7 @@ export function PriceDrum({
           </div>
           {i === 2 && (
             <span
-              className="w-2 self-end pb-11 text-2xl font-black text-gray-400 transition-opacity duration-150"
+              className={`w-2 self-end pb-11 text-2xl font-black transition-opacity duration-150 ${gold ? "text-amber-400" : "text-gray-400"}`}
               style={{ opacity: folded > 2 ? 0 : 1, width: folded > 2 ? 0 : undefined }}
             >
               ,
@@ -441,16 +447,23 @@ export function PriceDrum({
           )}
         </div>
       ))}
-      <div className="relative mx-0.5 w-[46px] rounded-xl bg-gray-100" style={{ height: VIEW_H }} aria-hidden>
+      <div className={`relative mx-0.5 w-[46px] rounded-xl ${gold ? "bg-amber-100" : "bg-gray-100"}`} style={{ height: VIEW_H }} aria-hidden>
         <div
-          className="absolute inset-x-0 flex items-center justify-center rounded-lg bg-white text-[32px] font-black tabular-nums text-gray-400 shadow-sm"
+          className={`absolute inset-x-0 flex items-center justify-center rounded-lg text-[32px] font-black tabular-nums shadow-sm ${
+            gold ? "bg-amber-50 text-amber-400" : "bg-white text-gray-400"
+          }`}
           style={{ top: ROW_H, height: ROW_H }}
         >
           0
         </div>
       </div>
-      <span className="ml-1.5 text-2xl font-bold text-gray-500">원</span>
-      <div ref={flashRef} className="pointer-events-none absolute inset-0 rounded-xl bg-amber-200/50 opacity-0 ring-4 ring-amber-300" />
+      <span className={`ml-1.5 text-2xl font-bold ${gold ? "text-amber-600" : "text-gray-500"}`}>원</span>
+      <div
+        className={`pointer-events-none absolute inset-0 rounded-xl opacity-0 ${
+          gold ? "bg-amber-300/50 ring-4 ring-amber-400" : "bg-amber-200/50 ring-4 ring-amber-300"
+        }`}
+        ref={flashRef}
+      />
     </div>
   );
 }

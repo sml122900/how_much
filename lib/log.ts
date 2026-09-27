@@ -1,10 +1,10 @@
 import { getSessionId } from "./storage";
-import type { ClickSource } from "./types";
+import type { ClickSource, RewardType, RoundType } from "./types";
 
 export type LogEvent =
-  | { type: "guess"; product_id: string; guess: number }
+  | { type: "guess"; product_id: string; guess: number; round_type: RoundType }
   | { type: "click"; product_id: string; source: ClickSource }
-  | { type: "milestone"; streak: number };
+  | { type: "milestone"; streak: number; reward: RewardType };
 
 /** fire-and-forget. 실패해도 UI에 영향 없음 */
 export function logEvent(event: LogEvent) {

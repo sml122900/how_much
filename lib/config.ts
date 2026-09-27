@@ -18,11 +18,30 @@ export const PRICE_STALE_DAYS = 14;
 export const PRICE_UNIT = 10;
 export const MAX_PRICE = 999_990;
 
-/** 이 연속 정답 수에 도달하면 토스트 + milestone 로그 (보상은 다음 패스) */
-export const STREAK_MILESTONES = [3, 5, 10] as const;
+/** 이 연속 정답 수(역대 best 기준)에 도달하면 칭호 획득. 문구는 lib/copy.ts, 매핑은 lib/rewards.ts */
+export const TITLE_THRESHOLDS = [3, 5, 10, 15] as const;
+/** 한 판에서 이 연속 정답에 도달하면 결과 화면에서 보너스 라운드가 열린다 */
+export const BONUS_STREAK_THRESHOLD = 5;
+export const BONUS_ROUND_SIZE = 5;
+/** 한 판에서 이 연속 정답에 도달하면 광고 제거 보상 (ADS_ENABLED일 때만) */
+export const AD_FREE_STREAK_THRESHOLD = 10;
+export const AD_FREE_HOURS = 24;
+/** 여러 번 받아도 지금부터 이 시간을 넘게 누적되지 않음 */
+export const AD_FREE_MAX_HOURS = 72;
 
 /** 제휴 링크로 허용하는 호스트 */
 export const PARTNER_LINK_HOST = "link.coupang.com";
+
+/**
+ * 광고 뼈대. 기본 OFF — 애드센스 승인 전에는 절대 스크립트를 로드하지 않는다.
+ * 슬롯 ID가 없으면 ADS_ENABLED=true 여도 AdSlot은 아무것도 렌더하지 않는다.
+ */
+export const ADS_ENABLED = process.env.NEXT_PUBLIC_ADS_ENABLED === "true";
+export const ADSENSE_CLIENT = process.env.NEXT_PUBLIC_ADSENSE_CLIENT ?? "";
+export const AD_SLOTS = {
+  start_bottom: process.env.NEXT_PUBLIC_AD_SLOT_START ?? "",
+  result_bottom: process.env.NEXT_PUBLIC_AD_SLOT_RESULT ?? "",
+} as const;
 
 /** 수정·축약 금지 */
 export const DISCLOSURE =
@@ -35,4 +54,6 @@ export const STORAGE_KEYS = {
   bestStreak: "nd_best_streak",
   seen: "seen",
   muted: "nd_muted",
+  /** lib/entitlements.ts 에서 직접 참조 (ISO timestamp) */
+  adFreeUntil: "hm_ad_free_until",
 } as const;

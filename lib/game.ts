@@ -59,9 +59,11 @@ export function buildShareText(
   appName: string,
   results: Pick<GuessResult, "hit">[],
   url: string,
+  titleLabel?: string | null,
 ): string {
   const hits = results.filter((r) => r.hit).length;
-  return `${appName} 🎯 ${hits}/${results.length} · 연속 ${maxStreak(results)}\n${resultLine(results)}\n${url}`;
+  const title = titleLabel ? ` · 🏅${titleLabel}` : "";
+  return `${appName} 🎯 ${hits}/${results.length} · 연속 ${maxStreak(results)}${title}\n${resultLine(results)}\n${url}`;
 }
 
 // ---------- 상품 선택 ----------

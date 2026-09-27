@@ -3,18 +3,23 @@
 import confetti from "canvas-confetti";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AD_FREE_HOURS,
+  AD_FREE_STREAK_THRESHOLD,
+  ADS_ENABLED,
   APP_NAME,
   APP_SUBCOPY,
   AUTO_ADVANCE_MS,
+  BONUS_ROUND_SIZE,
+  BONUS_STREAK_THRESHOLD,
   MAX_POINTS,
   MAX_PRICE,
   PRICE_UNIT,
   ROUND_SIZE,
   SITE_URL,
-  STREAK_MILESTONES,
   TOLERANCE_PCT,
 } from "@/lib/config";
 import { COPY } from "@/lib/copy";
+import { formatAdFreeUntil, getAdFreeUntil, grantAdFree, isAdFree } from "@/lib/entitlements";
 import {
   buildShareText,
   cheaperPct,
@@ -27,11 +32,13 @@ import {
   resultLine,
 } from "@/lib/game";
 import { logEvent } from "@/lib/log";
-import { freshPool } from "@/lib/products";
+import { freshPool, hardPool } from "@/lib/products";
+import { titleForBestStreak, titleLabel } from "@/lib/rewards";
 import { installAudioUnlock, play } from "@/lib/sfx";
 import { addSeen, getBestStreak, getSeen, setBestStreak } from "@/lib/storage";
-import type { GuessResult, Outcome, Product } from "@/lib/types";
+import type { GuessResult, Outcome, Product, RoundType } from "@/lib/types";
 import { useReducedMotion } from "@/lib/useReducedMotion";
+import { AdSlot } from "./AdSlot";
 import { Disclosure } from "./Disclosure";
 import { MuteToggle } from "./MuteToggle";
 import { PartnerLink } from "./PartnerLink";
@@ -39,6 +46,8 @@ import { type DrumMode, PriceDrum } from "./PriceDrum";
 import { ProductImage } from "./ProductImage";
 
 type Phase = "start" | "play" | "result";
+/** 게임 결과에 어느 라운드에서 나온 문제인지 태그 */
+type RoundResult = GuessResult & { roundType: RoundType };
 
 const primaryBtn =
   "flex h-14 w-full items-center justify-center rounded-2xl bg-gray-900 text-lg font-bold text-white transition active:scale-[0.98] disabled:bg-gray-300";
@@ -46,24 +55,44 @@ const ctaBtn =
   "flex h-16 w-full items-center justify-center rounded-2xl bg-blue-600 text-xl font-extrabold text-white shadow-lg shadow-blue-600/20 transition active:scale-[0.98]";
 const secondaryBtn =
   "flex h-12 w-full items-center justify-center rounded-2xl text-base font-semibold text-gray-500 transition active:bg-gray-100";
+const bonusBtn =
+  "flex h-14 w-full items-center justify-center rounded-2xl bg-amber-500 text-lg font-bold text-white transition active:scale-[0.98] active:bg-amber-500";
 const grayLink = "text-sm text-gray-400 underline underline-offset-2";
 
 export function Game() {
+  const reducedMotion = useReducedMotion();
   const [phase, setPhase] = useState<Phase>("start");
   const [round, setRound] = useState<Product[]>([]);
   const [idx, setIdx] = useState(0);
-  const [results, setResults] = useState<GuessResult[]>([]);
+  const [roundType, setRoundType] = useState<RoundType>("main");
+  const [results, setResults] = useState<RoundResult[]>([]);
   const [streak, setStreak] = useState(0);
   const [best, setBest] = useState(0);
+  const [sessionStartBest, setSessionStartBest] = useState(0);
+  const [bonusPlayed, setBonusPlayed] = useState(false);
   const [poolSize, setPoolSize] = useState<number | null>(null);
+  const [hardPoolSize, setHardPoolSize] = useState<number | null>(null);
+  const [adFreeUntil, setAdFreeUntil] = useState<Date | null>(null);
   const [toast, setToast] = useState<{ id: number; text: string } | null>(null);
+  /** 보너스 해금 알림은 한 판(main+bonus 전체)에 한 번만 — 보너스 도중 스트릭이 끊겼다 다시 5를 넘어도 다시 띄우지 않는다 */
+  const bonusUnlockNotified = useRef(false);
 
   const product = round[idx];
 
   // 풀은 "지금" 날짜 기준 — 하이드레이션 이후에 계산
   useEffect(() => {
     setPoolSize(freshPool().length);
+    setHardPoolSize(hardPool().length);
     return installAudioUnlock();
+  }, []);
+
+  // 광고 제거 배지: 마운트 시 확인 + 만료되면 사라지도록 주기 갱신 (ADS_ENABLED일 때만)
+  useEffect(() => {
+    if (!ADS_ENABLED) return;
+    const check = () => setAdFreeUntil(isAdFree() ? getAdFreeUntil() : null);
+    check();
+    const t = setInterval(check, 30_000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
@@ -80,28 +109,63 @@ export function Game() {
     addSeen(picked.map((p) => p.id));
     setRound(picked);
     setIdx(0);
+    setRoundType("main");
     setResults([]);
     setStreak(0);
-    setBest(getBestStreak());
+    setBonusPlayed(false);
+    bonusUnlockNotified.current = false;
+    const curBest = getBestStreak();
+    setBest(curBest);
+    setSessionStartBest(curBest);
     setPhase("play");
   }
 
-  // 공개가 끝난 순간에 점수·스트릭 반영
+  function startBonus() {
+    const picked = pickRound(hardPool(), BONUS_ROUND_SIZE, { seen: getSeen() });
+    if (picked.length === 0) return; // 버튼이 이미 숨겨져 있어야 하지만 방어적으로
+    addSeen(picked.map((p) => p.id));
+    setRound(picked);
+    setIdx(0);
+    setRoundType("bonus");
+    setBonusPlayed(true);
+    // 스트릭·최고 기록은 본 판에서 이어서 — 초기화하지 않는다
+    setPhase("play");
+  }
+
+  // 공개가 끝난 순간에 점수·스트릭·보상 반영
   const onRevealed = useCallback(
     (r: GuessResult) => {
-      setResults((prev) => [...prev, r]);
-      const next = r.hit ? streak + 1 : 0;
+      setResults((prev) => [...prev, { ...r, roundType }]);
+
+      const prevStreak = streak;
+      const next = r.hit ? prevStreak + 1 : 0;
       setStreak(next);
-      if (next > best) {
+
+      const prevBest = best;
+      if (next > prevBest) {
         setBest(next);
         setBestStreak(next);
+        const oldTitle = titleForBestStreak(prevBest);
+        const newTitle = titleForBestStreak(next);
+        if (newTitle && newTitle !== oldTitle) {
+          logEvent({ type: "milestone", streak: next, reward: "title" });
+        }
       }
-      if ((STREAK_MILESTONES as readonly number[]).includes(next)) {
-        showToast(COPY.milestone(next));
-        logEvent({ type: "milestone", streak: next });
+
+      if (!bonusUnlockNotified.current && prevStreak < BONUS_STREAK_THRESHOLD && next >= BONUS_STREAK_THRESHOLD) {
+        bonusUnlockNotified.current = true;
+        showToast(COPY.bonusUnlocked);
+        logEvent({ type: "milestone", streak: next, reward: "bonus_unlock" });
+      }
+
+      if (ADS_ENABLED && prevStreak < AD_FREE_STREAK_THRESHOLD && next >= AD_FREE_STREAK_THRESHOLD) {
+        const until = grantAdFree(AD_FREE_HOURS);
+        setAdFreeUntil(until);
+        showToast(COPY.adFreeGranted);
+        logEvent({ type: "milestone", streak: next, reward: "ad_free" });
       }
     },
-    [streak, best, showToast],
+    [streak, best, roundType, showToast],
   );
 
   const next = useCallback(() => {
@@ -112,6 +176,14 @@ export function Game() {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [phase, idx]);
+
+  const mainMaxStreak = maxStreak(results.filter((r) => r.roundType === "main"));
+  const bonusEligible =
+    phase === "result" &&
+    !bonusPlayed &&
+    mainMaxStreak >= BONUS_STREAK_THRESHOLD &&
+    hardPoolSize !== null &&
+    hardPoolSize >= BONUS_ROUND_SIZE;
 
   return (
     <>
@@ -127,6 +199,11 @@ export function Game() {
           {phase === "play" && (
             <span className={streak > 0 ? "text-orange-500" : "text-gray-400"}>🔥 연속 {streak}</span>
           )}
+          {ADS_ENABLED && adFreeUntil && (
+            <span className="text-[11px] font-bold text-emerald-600">
+              {COPY.adFreeUntil(formatAdFreeUntil(adFreeUntil))}
+            </span>
+          )}
           <MuteToggle />
         </div>
       </div>
@@ -134,14 +211,26 @@ export function Game() {
       {phase === "start" && <StartScreen onStart={start} disabled={poolSize === 0} />}
       {phase === "play" && product && (
         <PlayScreen
-          key={`${product.id}-${idx}`}
+          key={`${roundType}-${product.id}-${idx}`}
           product={product}
+          roundType={roundType}
           isLast={idx + 1 >= round.length}
+          reducedMotion={reducedMotion}
           onRevealed={onRevealed}
           onNext={next}
         />
       )}
-      {phase === "result" && <ResultScreen results={results} best={best} onRetry={start} />}
+      {phase === "result" && (
+        <ResultScreen
+          results={results}
+          best={best}
+          sessionStartBest={sessionStartBest}
+          bonusEligible={bonusEligible}
+          reducedMotion={reducedMotion}
+          onStartBonus={startBonus}
+          onRetry={start}
+        />
+      )}
 
       {toast && (
         <div
@@ -166,20 +255,34 @@ function StartScreen({ onStart, disabled }: { onStart: () => void; disabled: boo
         <h1 className="mt-4 text-5xl font-black tracking-tight">{APP_NAME}</h1>
         <p className="mt-3 text-lg text-gray-500">{APP_SUBCOPY}</p>
       </div>
-      <ol className="space-y-3 rounded-2xl bg-gray-50 p-5 text-[15px] leading-relaxed text-gray-700">
-        <li>
-          <b className="mr-2 text-gray-900">1</b>사진과 설명을 보고 숫자 드럼을 굴려 가격을 맞혀요
-        </li>
-        <li>
-          <b className="mr-2 text-gray-900">2</b>실제 가격과 {TOLERANCE_PCT}% 이내면 정답, 가까울수록 고득점
-        </li>
-        <li>
-          <b className="mr-2 text-gray-900">3</b>한 판 {ROUND_SIZE}문제, 연속 정답으로 기록을 세워요
-        </li>
-      </ol>
+      <div>
+        <ol className="space-y-3 rounded-2xl bg-gray-50 p-5 text-[15px] leading-relaxed text-gray-700">
+          <li>
+            <b className="mr-2 text-gray-900">1</b>사진과 설명을 보고 숫자 드럼을 굴려 가격을 맞혀요
+          </li>
+          <li>
+            <b className="mr-2 text-gray-900">2</b>실제 가격과 {TOLERANCE_PCT}% 이내면 정답, 가까울수록 고득점
+          </li>
+          <li>
+            <b className="mr-2 text-gray-900">3</b>한 판 {ROUND_SIZE}문제, 연속 정답으로 기록을 세워요
+          </li>
+        </ol>
+        <details className="group">
+          <summary className="flex cursor-pointer list-none items-center justify-center gap-1 py-2.5 text-sm font-semibold text-gray-400">
+            {COPY.rewardsInfoTitle}
+            <span className="transition group-open:rotate-180">▾</span>
+          </summary>
+          <ul className="-mt-1 space-y-1.5 rounded-2xl bg-gray-50 p-4 text-[13px] leading-relaxed text-gray-500">
+            <li>🏅 {COPY.rewardsInfoTitleLine}</li>
+            <li>🎁 {COPY.rewardsInfoBonusLine}</li>
+            {ADS_ENABLED && <li>🚫 {COPY.rewardsInfoAdFreeLine}</li>}
+          </ul>
+        </details>
+      </div>
       <button type="button" className={primaryBtn} onClick={onStart} disabled={disabled}>
         {disabled ? "준비 중인 상품이 없어요" : "시작"}
       </button>
+      <AdSlot placement="start_bottom" />
     </div>
   );
 }
@@ -217,16 +320,19 @@ const REVEAL_TIMER = "reveal: 제출→마지막 정지";
 
 function PlayScreen({
   product,
+  roundType,
   isLast,
+  reducedMotion,
   onRevealed,
   onNext,
 }: {
   product: Product;
+  roundType: RoundType;
   isLast: boolean;
+  reducedMotion: boolean;
   onRevealed: (r: GuessResult) => void;
   onNext: () => void;
 }) {
-  const reducedMotion = useReducedMotion();
   const [stage, setStage] = useState<DrumMode>("input");
   const [value, setValue] = useState(0);
   const [result, setResult] = useState<GuessResult | null>(null);
@@ -234,6 +340,7 @@ function PlayScreen({
   const [directText, setDirectText] = useState("");
   const [autoCancelled, setAutoCancelled] = useState(false);
   const resultRef = useRef<GuessResult | null>(null);
+  const isBonus = roundType === "bonus";
 
   const outcome = result ? outcomeOf(result) : null;
   const autoAdvance = outcome === "hit" || outcome === "miss";
@@ -245,7 +352,7 @@ function PlayScreen({
     resultRef.current = r;
     setResult(r);
     setStage("spin");
-    logEvent({ type: "guess", product_id: product.id, guess: value });
+    logEvent({ type: "guess", product_id: product.id, guess: value, round_type: roundType });
   }
 
   const onSpinEnd = useCallback(() => {
@@ -264,6 +371,13 @@ function PlayScreen({
 
   return (
     <div className="flex flex-col">
+      {isBonus && (
+        <div className="mb-1 flex justify-center">
+          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-black tracking-wide text-amber-700">
+            {COPY.bonusBadge}
+          </span>
+        </div>
+      )}
       <div className="mx-auto" style={{ width: "min(100%, max(96px, calc(100dvh - 520px)))" }}>
         <ProductImage src={product.image_url} alt={product.name} priority sizes="(max-width: 448px) 60vw, 280px" />
       </div>
@@ -291,6 +405,7 @@ function PlayScreen({
           target={product.price}
           reducedMotion={reducedMotion}
           onSpinEnd={onSpinEnd}
+          gold={isBonus}
         />
       </div>
 
@@ -438,17 +553,33 @@ function Verdict({
 function ResultScreen({
   results,
   best,
+  sessionStartBest,
+  bonusEligible,
+  reducedMotion,
+  onStartBonus,
   onRetry,
 }: {
-  results: GuessResult[];
+  results: RoundResult[];
   best: number;
+  sessionStartBest: number;
+  bonusEligible: boolean;
+  reducedMotion: boolean;
+  onStartBonus: () => void;
   onRetry: () => void;
 }) {
   const [toast, setToast] = useState("");
-  const score = results.reduce((s, r) => s + r.points, 0);
+  const mainResults = results.filter((r) => r.roundType === "main");
+  const bonusResults = results.filter((r) => r.roundType === "bonus");
+  const mainScore = mainResults.reduce((s, r) => s + r.points, 0);
+  const bonusScore = bonusResults.reduce((s, r) => s + r.points, 0);
   const hits = results.filter((r) => r.hit).length;
   const deals = results.filter((r) => r.cheaper);
   const rest = results.filter((r) => !r.cheaper);
+
+  const titleKey = titleForBestStreak(best);
+  const titleLbl = titleLabel(titleKey);
+  const isNewTitle = titleKey !== null && titleForBestStreak(sessionStartBest) !== titleKey;
+  const [showNewTitle, setShowNewTitle] = useState(isNewTitle);
 
   useEffect(() => {
     if (!toast) return;
@@ -456,9 +587,19 @@ function ResultScreen({
     return () => clearTimeout(t);
   }, [toast]);
 
+  // 새 칭호 획득 연출: 폭죽 소형 + 효과음 재사용. 이 결과 화면이 뜬 시점에 한 번만
+  useEffect(() => {
+    if (!isNewTitle) return;
+    play("cheer");
+    if (!reducedMotion) confetti({ zIndex: 40, particleCount: 60, spread: 70, scalar: 0.8, origin: { y: 0.2 } });
+    const t = setTimeout(() => setShowNewTitle(false), 3000);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function share() {
     const url = SITE_URL || window.location.origin;
-    const text = buildShareText(APP_NAME, results, url);
+    const text = buildShareText(APP_NAME, results, url, titleLbl);
     if (typeof navigator.share === "function") {
       try {
         await navigator.share({ text });
@@ -477,12 +618,24 @@ function ResultScreen({
 
   return (
     <div className="flex flex-col">
+      {titleLbl && (
+        <div className="flex flex-col items-center gap-1 pb-1">
+          {showNewTitle && <p className="text-xs font-bold text-amber-600">{COPY.newTitle}</p>}
+          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-3 py-1 text-sm font-bold text-amber-700 ring-1 ring-amber-200">
+            🏅 {titleLbl}
+          </span>
+        </div>
+      )}
+
       <div className="pt-2 text-center">
         <p className="text-sm font-semibold text-gray-500">이번 판 점수</p>
         <p className="mt-1 text-6xl font-black tracking-tight">
-          {score}
-          <span className="text-2xl font-bold text-gray-400">/{results.length * MAX_POINTS}</span>
+          {mainScore}
+          <span className="text-2xl font-bold text-gray-400">/{mainResults.length * MAX_POINTS}</span>
         </p>
+        {bonusResults.length > 0 && (
+          <p className="mt-1 text-lg font-black text-amber-600">{COPY.bonusScore(bonusScore)}</p>
+        )}
         <p className="mt-5 whitespace-nowrap text-[22px] tracking-wide">{resultLine(results)}</p>
       </div>
 
@@ -493,6 +646,11 @@ function ResultScreen({
       </dl>
 
       <div className="mt-6 flex flex-col gap-2">
+        {bonusEligible && (
+          <button type="button" className={bonusBtn} onClick={onStartBonus}>
+            ✨ {COPY.bonusCta}
+          </button>
+        )}
         <button type="button" className={primaryBtn} onClick={share}>
           공유하기
         </button>
@@ -559,6 +717,10 @@ function ResultScreen({
           <Disclosure className="mt-2" />
         </details>
       )}
+
+      <div className="mt-12">
+        <AdSlot placement="result_bottom" />
+      </div>
 
       {toast && (
         <div

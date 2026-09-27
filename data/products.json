@@ -8,7 +8,8 @@
     "category": "생활·주방",
     "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p001",
     "price_checked_at": "2026-09-27",
-    "shipping": "rocket_threshold"
+    "shipping": "rocket_threshold",
+    "tier": "normal"
   },
   {
     "id": "p002",
@@ -19,7 +20,8 @@
     "category": "생활·주방",
     "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p002",
     "price_checked_at": "2026-09-27",
-    "shipping": "seller_free"
+    "shipping": "seller_free",
+    "tier": "normal"
   },
   {
     "id": "p003",
@@ -30,6 +32,7 @@
     "category": "생활·주방",
     "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p003",
     "price_checked_at": "2026-09-27",
-    "shipping": "rocket_free"
+    "shipping": "rocket_free",
+    "tier": "normal"
   }
 ]

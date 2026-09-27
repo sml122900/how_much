@@ -12,7 +12,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { MAX_PRICE, PARTNER_LINK_HOST, PRICE_STALE_DAYS, PRICE_UNIT } from "../lib/config";
 import { daysSince } from "../lib/freshness";
-import { SHIPPING_TYPES, type Product, type Shipping } from "../lib/types";
+import { SHIPPING_TYPES, TIERS, type Product, type Shipping, type Tier } from "../lib/types";
 
 const COLUMNS = [
   "id",
@@ -28,6 +28,7 @@ const COLUMNS = [
   "price_basis",
   "options",
   "shipping",
+  "tier",
 ] as const;
 
 const OPTIONS = ["single", "default"];
@@ -161,6 +162,11 @@ function main() {
     const shipping = col(r, "shipping") as Shipping;
     if (!SHIPPING_TYPES.includes(shipping)) err(`shipping 은 ${SHIPPING_TYPES.join("/")} 중 하나 "${shipping}"`);
 
+    // 비우면 normal (보너스 라운드용 hard 풀은 명시적으로 표시한 상품만)
+    const tierRaw = col(r, "tier").toLowerCase();
+    const tier = (tierRaw === "" ? "normal" : tierRaw) as Tier;
+    if (!TIERS.includes(tier)) err(`tier 는 비우거나 normal/hard 중 하나 "${col(r, "tier")}"`);
+
     const activeRaw = col(r, "active").toLowerCase();
     if (activeRaw !== "true" && activeRaw !== "false") err(`active 는 true/false "${col(r, "active")}"`);
 
@@ -182,6 +188,7 @@ function main() {
       partner_url: partnerUrl,
       price_checked_at: checkedAt,
       shipping,
+      tier,
     });
   });
 

@@ -9,8 +9,8 @@ npm run build:products   # data/products.csv → data/products.json
 npm run dev              # http://localhost:3000
 ```
 
-- 게임 규칙 상수(허용 오차, 문제 수, 자동 넘김 시간, 스트릭 마일스톤 등): `lib/config.ts`
-- 화면 문구("정답!", "생각보다 N% 싸요", "실제가는 더 비쌌어요", 버튼 문구 등): `lib/copy.ts`
+- 게임 규칙 상수(허용 오차, 문제 수, 자동 넘김 시간, 보상 임계값 등): `lib/config.ts`
+- 화면 문구("정답!", "생각보다 N% 싸요", 칭호, 보너스·광고 제거 안내 등): `lib/copy.ts`
 
 ## 판정과 공개 연출
 
@@ -27,6 +27,20 @@ npm run dev              # http://localhost:3000
 | MISS | 둔탁한 소리, "실제가는 더 비쌌어요" | 회색 [그래도 구매할래요] | 2.5초 후 자동 |
 
 회색 링크를 누르면 자동 넘김이 취소된다. 링크 클릭은 점수·보상과 무관하다.
+
+## 보상: 칭호 · 보너스 라운드 · 광고 제거
+
+세 보상 모두 **링크 클릭·구매와는 무관**하며, 순수하게 연속 정답(스트릭) 기준으로 주어진다.
+임계값·시간은 `lib/config.ts`, 칭호 문구는 `lib/copy.ts`, 매핑 로직은 `lib/rewards.ts`.
+
+| 보상 | 기준 | 내용 |
+| --- | --- | --- |
+| 칭호 | **역대** best streak 3 / 5 / 10 / 15 | 결과 화면 상단에 뱃지로 상시 표시. 이번 판에 새로 얻었으면 "새 칭호 획득!" 연출(폭죽 소형 + 효과음) 후 공유 텍스트에도 포함 |
+| 보너스 라운드 | **이번 판**(본 판) 중 streak 5 도달 | 결과 화면에 [보너스 라운드 도전] 버튼 활성화. 하드 풀에서 5문제 추가 출제, 스트릭은 이어서 계산, 점수는 "보너스 +N"으로 별도 표시. 한 판에 한 번만 |
+| 광고 제거 24시간 | **이번 판** 중 streak 10 도달 (`ADS_ENABLED=true`일 때만) | localStorage에 만료 시각 저장. 이미 활성 중이면 24h 연장, 지금부터 최대 72h까지만 누적 |
+
+칭호는 "역대" 기준이라 한 번 얻으면 계속 유지되고, 보너스·광고 제거는 "이번 판" 기준이라 매 판 다시 도달해야 한다.
+보너스 라운드용 **하드 풀**(`tier=hard`)이 5개 미만이면 버튼은 조용히 숨겨진다(에러 없음).
 
 ## 1. 상품 CSV 채우기
 
@@ -48,6 +62,7 @@ npm run dev              # http://localhost:3000
 | `price_basis` | 항상 `listed` — 비회원이 로그인 없이 보는 기본 판매가 |
 | `options` | `single`(단일 옵션) / `default`(다중 옵션이면 링크가 그 옵션으로 열리고 그 옵션 가격을 적음) |
 | `shipping` | `rocket_free` / `rocket_threshold` / `seller_free` / `seller_paid` |
+| `tier` | 비우면 `normal`. `hard`면 보너스 라운드 전용 풀에 들어감 (아래 참고) |
 
 `shipping` 이 `rocket_threshold`(로켓배송 19,800원 미만 → 비회원 배송비) 또는 `seller_paid` 이면
 공개 화면 실제가 아래에 "배송비 별도일 수 있음", 나머지는 "무료배송"이 표시된다.
@@ -63,6 +78,14 @@ npm run dev              # http://localhost:3000
 - [ ] 배송 조건을 확인해 `shipping` 을 정확히 적는다
 - [ ] 가격의 일의 자리가 0이 아닌 상품(예: 12,345원)은 드럼으로 맞힐 수 없으니 제외한다
 - [ ] `price_checked_at` 을 확인한 날로 적는다
+
+### 하드 풀 (`tier=hard`) 큐레이션
+
+보너스 라운드 전용 풀이다. "가격 감이 잘 안 오는 상품" — 가전·디지털, 인테리어 소품, 계절 가전처럼
+가격대가 넓거나 브랜드에 따라 편차가 큰 카테고리를 고른다. 위 체크리스트는 동일하게 적용되고, 추가로:
+
+- [ ] **드럼 상한은 999,990원**이다. "고가"라도 이 범위 안에서 고른다 (예: 100만 원대 가전은 제외)
+- [ ] 최소 5개 이상 등록해야 보너스 라운드가 열린다 (`BONUS_ROUND_SIZE`, `lib/config.ts`)
 
 ### 순서
 
@@ -83,7 +106,8 @@ env가 없으면 `/api/log` 는 204만 반환하고 아무것도 저장하지 �
 
 1. Supabase 프로젝트 생성
 2. SQL Editor에서 `supabase/migrations/` 의 파일을 **이름 순서대로** 실행 (또는 `supabase link` → `supabase db push`)
-   - `guesses`, `clicks`(source: `reveal` / `reveal_gray` / `result` / `result_rest`), `milestones`
+   - `guesses`(round_type: `main` / `bonus`), `clicks`(source: `reveal` / `reveal_gray` / `result` / `result_rest`),
+     `milestones`(reward: `title` / `bonus_unlock` / `ad_free`)
    - RLS 활성화, anon 정책 없음 → 클라이언트에서 직접 접근 불가
 3. env 설정 (`.env.local` 또는 Vercel):
 
@@ -94,14 +118,36 @@ NEXT_PUBLIC_SITE_URL=https://...     # 공유 문구에 들어갈 URL (없으면
 ```
 
 서버는 가격·정답 여부·오차를 클라이언트 값이 아니라 `products.json` 기준으로 다시 계산해 저장한다.
-`milestones` 는 연속 정답 3/5/10 도달 기록이다 (보상 시스템은 아직 없음 — 훅만).
 
-## 3. 배포 (Vercel)
+## 3. 광고 (선택, 기본 OFF — 애드센스 승인 전 대비용 뼈대)
+
+`NEXT_PUBLIC_ADS_ENABLED` 가 없거나 `true`가 아니면 광고 코드는 아예 실행되지 않는다.
+슬롯 ID가 하나라도 비어 있으면 그 위치의 광고도 렌더되지 않는다.
+
+```
+NEXT_PUBLIC_ADS_ENABLED=true
+NEXT_PUBLIC_ADSENSE_CLIENT=ca-pub-XXXXXXXXXXXXXXXX
+NEXT_PUBLIC_AD_SLOT_START=1111111111       # 시작 화면 하단
+NEXT_PUBLIC_AD_SLOT_RESULT=2222222222      # 결과 화면 하단, 이득 목록과 48px 이상 간격
+```
+
+- `NEXT_PUBLIC_*` 값은 빌드 시점에 고정되므로 값을 바꾸면 재배포해야 한다.
+- 광고는 시작·결과 화면 하단에만 둔다. 문제·공개 화면, 구매 CTA·회색 링크 근처, 보너스 라운드 중에는 절대 넣지 않는다(`components/AdSlot.tsx` 주석 참고).
+- 스트릭 10 보상으로 광고 제거가 활성 중이면 `ADS_ENABLED=true` 여도 광고를 그리지 않는다.
+- **실제 애드센스 계정에서 "자동 광고(Auto ads)"는 꺼두는 것을 권장한다.** 테스트 중 확인한 바로는, 자동 광고가 켜져 있으면 우리가 배치하지 않은 화면에도 구글 스크립트가 자체적으로 광고 요소를 끼워 넣을 수 있어 — 문제/공개 화면 근처에 광고를 두지 않는다는 원칙이 우리 코드 밖에서 깨질 수 있다.
+
+## 4. 배포 (Vercel)
 
 1. GitHub에 push → Vercel에서 Import (Framework: Next.js, 설정 기본값)
-2. Environment Variables에 위 3개 입력
+2. Environment Variables에 Supabase 3개(선택) + 광고 4개(선택) 입력
 3. Deploy. 커스텀 도메인을 붙이면 `NEXT_PUBLIC_SITE_URL` 도 그 도메인으로 바꾸고 재배포
 4. 상품 갱신은 CSV 수정 → `npm run build:products` → 커밋·push
+
+## 5. 소개·개인정보 처리방침 (`/about`, `/privacy`)
+
+애드센스 심사 등을 대비한 기본 페이지 초안이 `app/about/page.tsx`, `app/privacy/page.tsx` 에 있고 푸터에 링크되어 있다.
+**내가 검토 필요**: 특히 `/privacy` 의 문의 이메일 자리표시자(`[문의 이메일 주소를 여기에 적어주세요]`)와
+사업자 정보, 실제 광고 게재 여부에 맞는 문구를 직접 확인·수정할 것.
 
 ## 입력 드럼 · 공개 연출
 
@@ -144,17 +190,22 @@ NEXT_PUBLIC_SITE_URL=https://...     # 공유 문구에 들어갈 URL (없으면
 ## 구조
 
 ```
-app/page.tsx               게임 (단일 페이지: 시작 → 문제/공개 → 결과)
+app/page.tsx               게임 (단일 페이지: 시작 → 문제/공개 → 결과 → 보너스)
+app/about/page.tsx         소개 (초안)
+app/privacy/page.tsx       개인정보 처리방침 (초안)
 app/api/log/route.ts       이벤트 로그 insert (service role)
 app/opengraph-image.tsx    정적 OG 이미지
-components/Game.tsx        화면·판정 연출
-components/PriceDrum.tsx   숫자 드럼 (입력·스핀·공개)
-lib/config.ts              상수
+components/Game.tsx        화면·판정 연출·보상 로직
+components/PriceDrum.tsx   숫자 드럼 (입력·스핀·공개, 보너스 중 골드 강조)
+components/AdSlot.tsx      광고 슬롯 뼈대 (기본 OFF)
+lib/config.ts              상수 (보상 임계값·광고 env 포함)
 lib/copy.ts                화면 문구
 lib/game.ts                채점·판정 분기·선택(seed 주입 가능)·공유 문구
+lib/rewards.ts             역대 best streak → 칭호 매핑
+lib/entitlements.ts        광고 제거 보상 (localStorage, 72h 누적 상한)
 lib/freshness.ts           가격 확인일 14일 판정 (빌드 스크립트·런타임 공용)
 lib/sfx.ts                 Web Audio 효과음·음소거
 lib/storage.ts             localStorage (session_id, best streak, seen)
 scripts/build-products.ts  CSV 검증 → products.json
-supabase/migrations/       SQL
+supabase/migrations/       SQL (이름 순서대로 적용)
 ```

@@ -10,6 +10,11 @@ export function freshPool(now: Date = new Date()): Product[] {
   return PRODUCTS.filter((p) => isPriceFresh(p.price_checked_at, now));
 }
 
+/** 보너스 라운드 전용 — 가격 감이 잘 안 오는 상품(tier=hard)만 */
+export function hardPool(now: Date = new Date()): Product[] {
+  return freshPool(now).filter((p) => p.tier === "hard");
+}
+
 const byId = new Map(PRODUCTS.map((p) => [p.id, p]));
 
 export function getProduct(id: string): Product | undefined {
