@@ -1,0 +1,32 @@
+[
+  {
+    "id": "p001",
+    "name": "스테인리스 계량스푼 5종 세트",
+    "description": "자석으로 붙어 서랍 속에서 흩어지지 않는 계량스푼",
+    "image_url": "https://thumbnail6.coupangcdn.com/placeholder/p001.jpg",
+    "price": 12900,
+    "category": "생활·주방",
+    "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p001",
+    "price_checked_at": "2026-09-27"
+  },
+  {
+    "id": "p002",
+    "name": "실리콘 주방 집게 2개입",
+    "description": "내열 230도 실리콘 팁이라 코팅 팬도 안심",
+    "image_url": "https://thumbnail6.coupangcdn.com/placeholder/p002.jpg",
+    "price": 15800,
+    "category": "생활·주방",
+    "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p002",
+    "price_checked_at": "2026-09-27"
+  },
+  {
+    "id": "p003",
+    "name": "규조토 욕실 발매트",
+    "description": "물기를 몇 초 만에 흡수하는 돌 발매트",
+    "image_url": "https://thumbnail6.coupangcdn.com/placeholder/p003.jpg",
+    "price": 24900,
+    "category": "생활·주방",
+    "partner_url": "https://link.coupang.com/a/PLACEHOLDER_p003",
+    "price_checked_at": "2026-09-27"
+  }
+]
