@@ -19,12 +19,23 @@ const SPRING_C = 24;
 const INERTIA_S = 0.12;
 const MAX_FLING = 15;
 
-// 공개 타임라인 (ms). 제출 → 마지막 정지 = LOCK + SPIN + (n−1)·GAP + LAND ≤ 1,490ms
+// 공개 정착 전용 스프링 — 입력 드럼과 같은 반작용(오버슛 후 되튕김)이지만 훨씬 빳빳하게 조여서
+// "마지막 100ms" 안에 딱 멎게 한다 (입력용 상수 그대로 쓰면 자리당 ~500ms씩 걸려 전체 타임라인이 늘어짐)
+const REVEAL_SPRING_K = 6000;
+const REVEAL_SPRING_C = 110;
+
+// 공개 타임라인 (ms). LOCK 후 모든 자리가 동시에 굴러가기 시작해서, 자리마다 다른
+// 길이만큼 감속하다 멈춘다 — 먼저 멈추는 자리는 짧고 빠르게, 나중 자리일수록 오래 돈다.
+// 정지 순서(j=0이 최상위 유효 자리)별 롤 지속시간. 제출 → 마지막 정지 ≤ LOCK + 마지막 값 + 스프링 정착
 const LOCK_MS = 150;
-const SPIN_MS = 500;
-const STOP_GAP_MS = 180;
-const LAND_MS = 120;
-const SPIN_SPEED = 30; // 칸/초
+const ROLL_DURATIONS = [250, 350, 450, 550, 650] as const;
+/** ease-out 지수. 4 이상이면 "cubic 이상" 요구를 만족하면서 막판 감속이 뚜렷해짐 */
+const ROLL_EASE_POWER = 4;
+/** 자리별 롤 거리 = 지속시간에 비례 (짧은 자리도 최소 이 칸 수는 굴러가게) */
+const ROLL_CELLS_PER_MS = 0.024;
+const ROLL_CELLS_MIN = 5;
+/** 목표 숫자까지 이 칸 수 이내로 들어오면: 블러 해제 + 틱 사운드 시작 (마지막 몇 숫자만 또렷하게) */
+const TICK_TAIL_CELLS = 3;
 
 const mod10 = (x: number) => ((x % 10) + 10) % 10;
 
@@ -39,15 +50,25 @@ function digitsToValue(digits: number[]): number {
 
 type Col = {
   p: number; // 연속 위치 (정수 = 숫자 정렬). 표시 숫자 = mod10(round(p))
-  v: number; // 칸/초
-  kind: "idle" | "drag" | "spring" | "spin" | "land";
+  v: number; // 칸/초 (스프링 단계에서만 씀)
+  kind: "idle" | "drag" | "spring" | "roll";
   target: number;
-  spinFrom: number;
-  landAt: number;
-  landFrom: number;
+  /** "spring" 단계에서 쓸 강성·감쇠 — 입력 드럼 해제(SPRING_K/C)와 공개 정착(REVEAL_SPRING_K/C)이 다름 */
+  springK: number;
+  springC: number;
   digit: number;
   shown: number;
   blurred: boolean;
+  /** roll 시작 시각(performance.now 기준) */
+  rollFrom: number;
+  /** 이 자리의 롤 지속시간(ms) */
+  rollDur: number;
+  /** 롤 시작 위치 */
+  rollStartP: number;
+  /** 롤이 끝나는 시점까지 이동할 총 거리 (목표를 살짝 지나친 오버슛 지점까지) */
+  rollDistance: number;
+  /** roll→spring 이 공개 연출의 일부라서 정착 시 onLand를 불러야 하는지 (입력 드럼 반작용과 구분) */
+  revealing: boolean;
 };
 
 type Drag = { i: number; y0: number; p0: number; t0: number; moved: number; samples: { t: number; p: number }[] };
@@ -83,12 +104,16 @@ export function PriceDrum({
       v: 0,
       kind: "idle",
       target: 0,
-      spinFrom: 0,
-      landAt: 0,
-      landFrom: 0,
+      springK: SPRING_K,
+      springC: SPRING_C,
       digit: 0,
       shown: 0,
       blurred: false,
+      rollFrom: 0,
+      rollDur: 0,
+      rollStartP: 0,
+      rollDistance: 0,
+      revealing: false,
     })),
   );
   const raf = useRef(0);
@@ -118,6 +143,9 @@ export function PriceDrum({
         tickSound();
         vibrate(8);
         emit();
+      } else if ((c.kind === "roll" || (c.kind === "spring" && c.revealing)) && Math.abs(c.target - c.p) <= TICK_TAIL_CELLS) {
+        // 공개 연출 막판 몇 자리: 속도가 느려질수록 틱 사이 간격도 자연히 벌어진다
+        tickSound();
       }
     }
   }
@@ -142,43 +170,39 @@ export function PriceDrum({
         case "spring": {
           for (let t = dt; t > 0; t -= 0.004) {
             const h = Math.min(t, 0.004);
-            c.v += (-SPRING_K * (c.p - c.target) - SPRING_C * c.v) * h;
+            c.v += (-c.springK * (c.p - c.target) - c.springC * c.v) * h;
             c.p += c.v * h;
           }
           if (Math.abs(c.p - c.target) < 0.002 && Math.abs(c.v) < 0.02) {
             c.p = c.target;
             c.v = 0;
             c.kind = "idle";
-          } else active = true;
-          break;
-        }
-        case "spin": {
-          active = true;
-          if (now < c.spinFrom) break;
-          if (!c.blurred) {
-            c.blurred = true;
-            strips.current[i]?.classList.add("drum-blur");
-          }
-          c.p += SPIN_SPEED * dt;
-          if (now >= c.landAt) {
-            // 최소 1칸은 더 굴러서 목표 숫자에 착지
-            const base = Math.ceil(c.p + 1);
-            c.target = base + mod10(c.digit - base);
-            c.landFrom = c.p;
-            c.landAt = now;
-            c.kind = "land";
-          }
-          break;
-        }
-        case "land": {
-          const t = Math.min(1, (now - c.landAt) / LAND_MS);
-          c.p = c.landFrom + (c.target - c.landFrom) * (1 - (1 - t) ** 3);
-          if (t >= 1) {
-            c.p = c.target;
-            c.kind = "idle";
             paint(i);
-            onLand(i);
+            if (c.revealing) {
+              c.revealing = false;
+              onLand(i);
+            }
           } else active = true;
+          break;
+        }
+        case "roll": {
+          active = true;
+          if (now < c.rollFrom) break;
+          const u = Math.min(1, (now - c.rollFrom) / c.rollDur);
+          const eased = 1 - (1 - u) ** ROLL_EASE_POWER; // 초반은 빠르게, 막판은 눈에 띄게 감속
+          c.p = c.rollStartP + c.rollDistance * eased;
+          // 목표(오버슛 전 정확한 숫자)까지 몇 칸 안 남으면 블러를 걷어 숫자가 읽히게 한다
+          if (c.blurred && Math.abs(c.target - c.p) <= TICK_TAIL_CELLS) {
+            c.blurred = false;
+            strips.current[i]?.classList.remove("drum-blur");
+          }
+          if (u >= 1) {
+            // 오버슛 지점에 도착 — 입력 드럼과 같은 반작용(스프링)으로, 다만 훨씬 빳빳하게 정착
+            c.kind = "spring";
+            c.v = 0;
+            c.springK = REVEAL_SPRING_K;
+            c.springC = REVEAL_SPRING_C;
+          }
           break;
         }
       }
@@ -199,6 +223,8 @@ export function PriceDrum({
     c.kind = "spring";
     c.target = targetPos;
     c.v = v;
+    c.springK = SPRING_K;
+    c.springC = SPRING_C;
     kick();
   }
 
@@ -271,13 +297,26 @@ export function PriceDrum({
       return;
     }
 
-    // 2. 스핀 → 3. 왼쪽부터 180ms 간격으로 정지
+    // 2. 모든 자리가 동시에 구르기 시작 → 3. 자리마다 다른 길이로 감속하며 왼쪽부터 정지
     cols.current.forEach((c, i) => {
       if (i < lead) return;
-      c.kind = "spin";
-      c.blurred = false;
-      c.spinFrom = now + LOCK_MS;
-      c.landAt = now + LOCK_MS + SPIN_MS + (i - lead) * STOP_GAP_MS;
+      const j = i - lead;
+      const dur = ROLL_DURATIONS[Math.min(j, ROLL_DURATIONS.length - 1)];
+      const cells = Math.max(ROLL_CELLS_MIN, Math.round(dur * ROLL_CELLS_PER_MS));
+      const overshoot = 1 + (j % 2); // 1~2칸 오버슛, 자리마다 번갈아 살짝 다르게
+      const startP = Math.round(c.p);
+      const base = Math.ceil(startP + cells); // 최소 cells칸은 굴러가게
+      const finalPos = base + mod10(c.digit - base); // 목표 숫자와 일치하는 첫 칸
+
+      c.kind = "roll";
+      c.blurred = true;
+      c.revealing = true;
+      c.rollFrom = now + LOCK_MS;
+      c.rollDur = dur;
+      c.rollStartP = startP;
+      c.rollDistance = finalPos + overshoot - startP;
+      c.target = finalPos;
+      strips.current[i]?.classList.add("drum-blur");
     });
     setTimeout(() => {
       if (modeRef.current === "spin") spinLoop.current = loop("spin", { gain: 0.7, rate: 1.4 });
