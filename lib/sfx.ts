@@ -125,8 +125,8 @@ export function startSpinEngine(): SpinEngineHandle {
   src.loop = true;
   const filter = c.createBiquadFilter();
   filter.type = "bandpass";
-  filter.Q.value = 0.9;
-  filter.frequency.value = 150;
+  filter.Q.value = 1.4;
+  filter.frequency.value = 130;
   const gain = c.createGain();
   gain.gain.value = 0;
   src.connect(filter).connect(gain).connect(master);
@@ -138,8 +138,10 @@ export function startSpinEngine(): SpinEngineHandle {
       if (stopped || !ctx) return;
       const speedNorm = Math.max(0, Math.min(1, cellsPerSec / 46));
       const t = ctx.currentTime;
-      filter.frequency.setTargetAtTime(150 + speedNorm * 700, t, 0.03);
-      const vol = activeCols > 0 ? 0.12 + speedNorm * 0.3 + Math.min(activeCols, 5) * 0.02 : 0;
+      filter.frequency.setTargetAtTime(130 + speedNorm * 1100, t, 0.025);
+      // 한 번에 한 자리씩만 도는 구조라 activeCols는 거의 항상 0~1 — 순수 speedNorm으로
+      // "그 자리가 돌 때만 커졌다 꺼지는" 느낌을 낸다 (기존보다 체감 볼륨을 키움)
+      const vol = activeCols > 0 ? 0.22 + speedNorm * 0.45 : 0;
       gain.gain.setTargetAtTime(vol, t, 0.05);
     },
     stop() {

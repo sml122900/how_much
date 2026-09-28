@@ -19,36 +19,34 @@ const SPRING_C = 24;
 const INERTIA_S = 0.12;
 const MAX_FLING = 15;
 
-// 공개 정착("철컥" 잠금) 전용 스프링 — 오버슛이 0.2~0.25칸으로 작아서 REVEAL 상수 그대로도 120ms 안에 정착됨
+// 공개 정착("철컥" 잠금) 전용 스프링 — 오버슛이 작아서(0.2칸) 이 상수로도 100ms 안팎에 정착됨
 const REVEAL_SPRING_K = 7500;
 const REVEAL_SPRING_C = 123;
 // 빨리감기 때는 더 빳빳하게 (탭→마지막 정지 300ms 예산 안에 들어와야 함)
 const FF_SPRING_K = 40000;
 const FF_SPRING_C = 280;
 
-// ---------- 공개 타임라인 (ms). 카지노 슬롯머신: 윈드업 → 풀스피드 → 감속 → (마지막 자리만) 애태우기 → 철컥 정착 ----------
-/** 레버를 당기는 느낌으로 살짝 역방향으로 당겼다 놓는 구간 */
-const WINDUP_MS = 90;
+// ---------- 공개 타임라인 (ms). 한 자리씩 순차로: 윈드업 → 촤라락(풀스피드) → 감속 → 철컥 정착.
+// 다음 자리는 이전 자리의 감속이 끝나 정착(펀치)이 시작되는 그 순간 바로 돌기 시작 — 죽은 시간 없이
+// 정착 스프링(~100ms)과 겹친다. 마지막 자리만 감속 뒤에 애태우기가 더 붙는다. ----------
+/** 레버를 당기는 느낌으로 살짝 역방향으로 당겼다 놓는 구간. 끝나자마자 곧바로 풀스피드로 전환 */
+const WINDUP_MS = 50;
 const WINDUP_PULLBACK_CELLS = 0.3;
 /** 풀스피드 순항 속도 (완료조건: 45칸/초 이상) */
 const FULL_SPEED_CPS = 46;
-/** 감속 구간에서 다루는 칸 수 ("마지막 약 10칸") */
-const TAIL_CELLS = 10;
-/** 철컥 잠금 전 살짝 지나치는 정도 (1~2칸이 아니라 0.2~0.25칸) */
-const LOCK_OVERSHOOT_CELLS = 0.225;
-/** 윈드업 이후 남은 시간 중 감속(꼬리) 구간이 차지하는 비율. 나머지는 풀스피드 순항 */
-const TAIL_TIME_FRACTION = 0.35;
+/** 촤라락 구간 지속시간 (스펙은 "약 280ms" — 5자리 기준 2.5초 예산에 맞추려 250ms로 소폭 조정) */
+const CRUISE_MS = 250;
+/** 감속 구간 지속시간 (스펙 "약 150ms" → 120ms로 소폭 조정, 이유는 위와 동일) */
+const DECEL_MS = 120;
+/** 감속 구간에서 다루는 칸 수 */
+const DECEL_TAIL_CELLS = 8;
+/** 철컥 잠금 전 살짝 지나치는 정도 */
+const LOCK_OVERSHOOT_CELLS = 0.2;
 const DECEL_EASE_POWER = 4;
-/** 자리(j=0이 최상위 유효 자리)별 정지 시각 = STOP_BASE_MS + j*STOP_STEP_MS */
-const STOP_BASE_MS = 900;
-const STOP_STEP_MS = 220;
-/** 마지막 자리만: 마지막 3칸을 칸당 이 시간으로 기어가며 애태움 */
+/** 마지막 자리만: 마지막 3칸을 칸당 이 시간으로 기어가며 애태움 (스펙 "약 160ms" → 총 예산 때문에 140ms) */
 const TEASE_CELLS = 3;
-// 스펙은 "칸당 약 160ms"이면서 동시에 "+400ms 내외"도 요구하는데, 3×160=480ms는 순수 추가시간
-// 기준으로 보면 "내외" 범위를 넘는다. 총 예산(2.3초)을 맞추려 120ms로 낮춰 net +360ms에 맞춘다.
-const TEASE_CELL_MS = 120;
+const TEASE_CELL_MS = 140;
 /** 빨리감기: 탭 후 남은 자리들이 이 간격으로 순차 정지 */
-// 스펙은 "60ms 간격"이지만 60ms×(n-1)+정착시간이 5자리에서 300ms 예산을 넘어 45ms로 낮췄다
 const FF_STAGGER_MS = 45;
 
 const mod10 = (x: number) => ((x % 10) + 10) % 10;
@@ -77,6 +75,7 @@ type Col = {
   shown: number;
   revealing: boolean; // spring 정착 시 onLand를 불러야 하는 공개 연출 중인지
   landed: boolean; // 잠금 표시용
+  pending: boolean; // 아직 자기 차례가 안 와서 "?"로 대기 중인지 (순차 스핀)
   speed: number; // 이번 프레임 순간 속도(칸/초) — 모션 블러 계산용
   // windup
   windupFrom: number;
@@ -111,6 +110,7 @@ function newCol(): Col {
     shown: 0,
     revealing: false,
     landed: false,
+    pending: false,
     speed: 0,
     windupFrom: 0,
     windupBaseP: 0,
@@ -151,6 +151,8 @@ export function PriceDrum({
 }) {
   const [folded, setFolded] = useState(0);
   const [lockedCount, setLockedCount] = useState(0);
+  /** cols.current[i].pending 변화를 화면에 반영하기 위한 강제 리렌더 트리거 (값 자체는 안 씀) */
+  const [, setRenderTick] = useState(0);
   const [spinning, setSpinning] = useState(false);
   const [hint, setHint] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -232,8 +234,15 @@ export function PriceDrum({
     let active = false;
     let totalSpeed = 0;
     let activeCols = 0;
+    let pendingChanged = false;
 
     cols.current.forEach((c, i) => {
+      // 순차 스핀: 대기(물음표) 중인 자리가 예정된 시각이 되면 이번 프레임에서 바로 윈드업 시작
+      if (c.kind === "idle" && c.pending && now >= c.windupFrom) {
+        c.kind = "windup";
+        c.pending = false;
+        pendingChanged = true;
+      }
       switch (c.kind) {
         case "spring": {
           if (now < c.springActiveAt) {
@@ -339,6 +348,7 @@ export function PriceDrum({
     });
 
     spinEngine.current?.update(activeCols > 0 ? totalSpeed / activeCols : 0, activeCols);
+    if (pendingChanged) setRenderTick((n) => n + 1);
     raf.current = active ? requestAnimationFrame(frame) : 0;
   }
 
@@ -406,17 +416,23 @@ export function PriceDrum({
     fastForwarded.current = true;
     const now = simClock.current;
     let k = 0;
+    let any = false;
     cols.current.forEach((c, i) => {
-      if (i < folded || c.kind === "idle") return;
+      // 이미 잠긴(kind idle이면서 대기 중도 아닌) 자리만 건너뛴다 — 아직 제 차례가 안 와서
+      // "?"로 대기 중인 자리도 빨리감기 대상이다
+      if (i < folded || (c.kind === "idle" && !c.pending)) return;
       // 남은 자리는 오버슛 없이 목표 숫자로 바로(빳빳한 스프링으로) 정착 — 순서대로 스태거를 두고 시작
       const delay = k * FF_STAGGER_MS;
       k++;
+      any = true;
+      c.pending = false;
       c.kind = "spring";
       c.springActiveAt = now + delay;
       c.springK = FF_SPRING_K;
       c.springC = FF_SPRING_C;
       c.revealing = true;
     });
+    if (any) setRenderTick((n) => n + 1);
     setHint(false);
     kick();
   }
@@ -437,6 +453,7 @@ export function PriceDrum({
       c.digit = digits[i];
       c.speed = 0;
       c.landed = false;
+      c.pending = i >= lead; // 자기 차례가 오기 전까지는 "?"로 대기
       paint(i);
     });
     setFolded(lead);
@@ -464,33 +481,37 @@ export function PriceDrum({
       setTimeout(() => setHint(false), 1500);
     }
 
+    // 한 자리씩 순차로: 자리 j(0=가장 먼저 도는 자리)의 윈드업 시작 시각은 바로 앞 자리의
+    // 윈드업+촤라락+감속이 끝나는(=정착이 시작되는) 바로 그 시점 — 정착 스프링(~100ms)과 자연히 겹친다
+    const cruiseCells = (FULL_SPEED_CPS * CRUISE_MS) / 1000;
+    const perColumnMs = WINDUP_MS + CRUISE_MS + DECEL_MS;
     cols.current.forEach((c, i) => {
       if (i < lead) return;
       const j = i - lead;
-      const stopAt = STOP_BASE_MS + j * STOP_STEP_MS;
-      const availableMs = stopAt - WINDUP_MS;
-      const decelDur = Math.max(200, availableMs * TAIL_TIME_FRACTION);
-      const cruiseDur = availableMs - decelDur;
-      const cruiseCells = (FULL_SPEED_CPS * cruiseDur) / 1000;
+      const isLast = i === lastCol.current;
+      const windupAt = now + j * perColumnMs;
       const startP = Math.round(c.p);
-      const distance = cruiseCells + TAIL_CELLS; // 윈드업 복귀 지점부터 오버슛 지점까지 총 이동
-      const base = Math.ceil(startP + distance - LOCK_OVERSHOOT_CELLS); // 오버슛 전 정확한 목표 셀
-      const finalPos = base + mod10(c.digit - base);
 
-      c.kind = "windup";
-      c.windupFrom = now;
+      c.kind = j === 0 ? "windup" : "idle";
+      c.pending = j !== 0;
+      c.windupFrom = windupAt;
       c.windupBaseP = startP;
-      c.cruiseFrom = now + WINDUP_MS;
-      c.cruiseDur = cruiseDur;
+      c.cruiseFrom = windupAt + WINDUP_MS;
+      c.cruiseDur = CRUISE_MS;
       c.cruiseStartP = startP;
-      c.decelDur = decelDur;
-      c.target = finalPos;
+      c.decelDur = DECEL_MS;
       c.revealing = true;
-      if (i === lastCol.current) {
-        // 마지막 자리: 감속은 애태우기 시작점(목표-3칸)까지만 — 여기서 이어받아 기어가므로 되돌아가는 점프가 없다.
-        // 애태우기(+TEASE_CELLS×TEASE_CELL_MS)가 스펙의 "추가 400ms 내외"에 해당
+
+      if (isLast) {
+        // 마지막 자리: 감속은 애태우기 시작점(목표-3칸)까지만 — 여기서 이어받아 기어가므로 되돌아가는 점프가 없다
+        const base = Math.ceil(startP + cruiseCells + DECEL_TAIL_CELLS - TEASE_CELLS);
+        const finalPos = base + mod10(c.digit - base);
+        c.target = finalPos;
         c.decelDistance = finalPos - TEASE_CELLS - startP - cruiseCells;
       } else {
+        const base = Math.ceil(startP + cruiseCells + DECEL_TAIL_CELLS - LOCK_OVERSHOOT_CELLS);
+        const finalPos = base + mod10(c.digit - base);
+        c.target = finalPos;
         c.decelDistance = finalPos + LOCK_OVERSHOOT_CELLS - startP - cruiseCells;
       }
     });
@@ -524,6 +545,15 @@ export function PriceDrum({
 
   useEffect(() => {
     if (mode === "spin" && target !== undefined) startSpin(target);
+    // React Strict Mode(개발 모드)는 이 effect를 mount→cleanup→mount로 두 번 실행한다.
+    // cleanup 없이 두면 첫 번째 startSpin이 만든 RAF 루프·스핀 엔진이 안 멈춘 채 두 번째
+    // startSpin이 상태를 다시 초기화해버려 타이밍이 꼬인다 — 여기서 확실히 정리한다.
+    return () => {
+      cancelAnimationFrame(raf.current);
+      raf.current = 0;
+      spinEngine.current?.stop();
+      spinEngine.current = null;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
@@ -645,7 +675,7 @@ export function PriceDrum({
                   className={`drum-view relative mx-0.5 overflow-hidden rounded-xl outline-none transition-shadow focus-visible:ring-2 ${
                     gold ? "bg-amber-100 focus-visible:ring-amber-500" : "bg-gray-100 focus-visible:ring-gray-900"
                   } ${interactive ? "cursor-grab touch-none active:cursor-grabbing" : ""} ${
-                    cols.current[i]?.kind === "idle" && spinning && i >= folded
+                    cols.current[i]?.kind === "idle" && !cols.current[i]?.pending && spinning && i >= folded
                       ? gold
                         ? "ring-2 ring-amber-400 brightness-105"
                         : "ring-2 ring-gray-900/70 brightness-105"
@@ -663,6 +693,14 @@ export function PriceDrum({
                     className={`payline pointer-events-none absolute inset-x-0 rounded-lg shadow-sm ${gold ? "bg-amber-50" : "bg-white"} ${spinning ? "payline-lit" : ""}`}
                     style={{ top: ROW_H, height: ROW_H }}
                   />
+                  {spinning && cols.current[i]?.pending && i >= folded && (
+                    <div
+                      className={`pointer-events-none absolute inset-0 z-[4] flex items-center justify-center text-[32px] font-black opacity-30 ${gold ? "text-amber-700" : "text-gray-500"}`}
+                      aria-hidden
+                    >
+                      ?
+                    </div>
+                  )}
                   <div ref={(el) => void (strips.current[i] = el)} className="relative will-change-transform">
                     {Array.from({ length: 10 * REPEAT }, (_, k) => (
                       <div
