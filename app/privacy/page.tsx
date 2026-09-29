@@ -71,7 +71,7 @@ export default function PrivacyPage() {
 
       <section>
         <h2 className="text-lg font-bold text-gray-900">6. 문의</h2>
-        <p className="mt-2">개인정보 처리방침에 대한 문의는 [문의 이메일 주소를 여기에 적어주세요]로 연락해주세요.</p>
+        <p className="mt-2">개인정보 처리방침에 대한 문의는 sml122900@lifebookapplication.com 로 연락해주세요.</p>
       </section>
     </article>
   );
