@@ -40,6 +40,7 @@ import type { GuessResult, Outcome, Product, RoundType } from "@/lib/types";
 import { useReducedMotion } from "@/lib/useReducedMotion";
 import { AdSlot } from "./AdSlot";
 import { Disclosure } from "./Disclosure";
+import { HideFooterDisclosure } from "./FooterVisibility";
 import { MuteToggle } from "./MuteToggle";
 import { PartnerLink } from "./PartnerLink";
 import { type DrumMode, PriceDrum } from "./PriceDrum";
@@ -500,6 +501,7 @@ function Verdict({
 
   return (
     <div className="mt-2 flex flex-col">
+      <HideFooterDisclosure />
       <p className="text-center text-xs text-gray-400">
         {shippingNote} · 가격 확인: {formatCheckedDate(product.price_checked_at)}
       </p>
@@ -618,6 +620,7 @@ function ResultScreen({
 
   return (
     <div className="flex flex-col">
+      <HideFooterDisclosure />
       {titleLbl && (
         <div className="flex flex-col items-center gap-1 pb-1">
           {showNewTitle && <p className="text-xs font-bold text-amber-600">{COPY.newTitle}</p>}
@@ -685,7 +688,6 @@ function ResultScreen({
               </li>
             ))}
           </ul>
-          <Disclosure className="mt-3" />
         </section>
       )}
 
@@ -714,9 +716,10 @@ function ResultScreen({
               </li>
             ))}
           </ul>
-          <Disclosure className="mt-2" />
         </details>
       )}
+
+      {(deals.length > 0 || rest.length > 0) && <Disclosure className="mt-6" />}
 
       <div className="mt-12">
         <AdSlot placement="result_bottom" />
