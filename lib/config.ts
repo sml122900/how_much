@@ -9,6 +9,8 @@ export const ROUND_SIZE = 10;
 export const MAX_POINTS = 100;
 /** HIT만 / MISS 공개 후 자동으로 다음 문제로 넘어가는 시간 */
 export const AUTO_ADVANCE_MS = 2500;
+/** 위와 같은 상황에서 selling_point(비싼 이유)를 같이 보여줄 때 — 읽을 시간 확보 */
+export const AUTO_ADVANCE_WITH_REASON_MS = 4000;
 /** localStorage `seen`에 보관하는 최근 상품 수 */
 export const SEEN_LIMIT = 50;
 /** price_checked_at 이 이 일수를 넘으면 게임 풀에서 제외 (빌드 시 + 런타임) */

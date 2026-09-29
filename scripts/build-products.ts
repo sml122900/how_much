@@ -36,6 +36,10 @@ const DESCRIPTION_MAX = 40;
 // next.config.ts images.remotePatterns 와 맞춰야 함
 const IMAGE_HOST_OK = (h: string) => h.endsWith(".coupangcdn.com") || h === "ads-partners.coupang.com";
 
+// selling_point / rating / review_count — 셋 다 선택 사항. 있으면 검증
+const PRICE_HINT_WORDS = ["싸다", "저렴", "가성비", "할인", "최저가"];
+const FIRST_PERSON_WORDS = ["써보니", "사용해보니", "제가", "직접 써"];
+
 const inPath = resolve(process.argv[2] ?? "data/products.csv");
 const outPath = resolve("data/products.json");
 
@@ -87,6 +91,11 @@ function main() {
     process.exit(1);
   }
   const col = (r: string[], name: (typeof COLUMNS)[number]) => (r[headerNorm.indexOf(name)] ?? "").trim();
+  // 선택 컬럼 — 헤더에 없어도 통과 (기존 CSV 그대로 빌드되어야 함)
+  const colOpt = (r: string[], name: string) => {
+    const i = headerNorm.indexOf(name);
+    return i === -1 ? "" : (r[i] ?? "").trim();
+  };
 
   const ids = new Set<string>();
   const pool: Product[] = [];
@@ -170,6 +179,31 @@ function main() {
     const activeRaw = col(r, "active").toLowerCase();
     if (activeRaw !== "true" && activeRaw !== "false") err(`active 는 true/false "${col(r, "active")}"`);
 
+    const sellingPoint = colOpt(r, "selling_point");
+    if (sellingPoint) {
+      if ([...sellingPoint].length > DESCRIPTION_MAX)
+        err(`selling_point ${[...sellingPoint].length}자 (최대 ${DESCRIPTION_MAX}자)`);
+      const priceHint = PRICE_HINT_WORDS.find((w) => sellingPoint.includes(w));
+      if (priceHint) err(`selling_point 에 가격 힌트 단어 포함 "${priceHint}" (가격 추측에 영향 주지 않아야 함)`);
+      const firstPerson = FIRST_PERSON_WORDS.find((w) => sellingPoint.includes(w));
+      if (firstPerson) err(`selling_point 에 1인칭 후기 표현 포함 "${firstPerson}" (써보지 않은 상품처럼 쓰지 말 것)`);
+    }
+
+    const ratingRaw = colOpt(r, "rating");
+    const reviewCountRaw = colOpt(r, "review_count");
+    let rating: number | undefined;
+    let reviewCount: number | undefined;
+    if (ratingRaw || reviewCountRaw) {
+      if (!ratingRaw || !reviewCountRaw) err("rating 과 review_count 는 둘 다 있거나 둘 다 없어야 함");
+      else {
+        if (!/^[0-5](\.\d)?$/.test(ratingRaw)) err(`rating 은 0~5 사이 소수점 한 자리 "${ratingRaw}"`);
+        else rating = Number(ratingRaw);
+        if (!/^\d+$/.test(reviewCountRaw) || !Number.isSafeInteger(Number(reviewCountRaw)))
+          err(`review_count 는 정수 "${reviewCountRaw}"`);
+        else reviewCount = Number(reviewCountRaw);
+      }
+    }
+
     if (activeRaw !== "true") {
       inactive++;
       return;
@@ -189,6 +223,8 @@ function main() {
       price_checked_at: checkedAt,
       shipping,
       tier,
+      ...(sellingPoint ? { selling_point: sellingPoint } : {}),
+      ...(rating !== undefined && reviewCount !== undefined ? { rating, review_count: reviewCount } : {}),
     });
   });
 

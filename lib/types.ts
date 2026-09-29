@@ -16,6 +16,11 @@ export type Product = {
   price_checked_at: string; // YYYY-MM-DD
   shipping: Shipping;
   tier: Tier;
+  /** 강점 한 줄 (40자 이내). 가격 힌트·1인칭 후기 표현 금지 — scripts/build-products.ts 참고 */
+  selling_point?: string;
+  /** rating·review_count 는 둘 다 있거나 둘 다 없음 */
+  rating?: number;
+  review_count?: number;
 };
 
 export type GuessResult = {

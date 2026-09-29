@@ -9,6 +9,7 @@ import {
   APP_NAME,
   APP_SUBCOPY,
   AUTO_ADVANCE_MS,
+  AUTO_ADVANCE_WITH_REASON_MS,
   BONUS_ROUND_SIZE,
   BONUS_STREAK_THRESHOLD,
   MAX_POINTS,
@@ -25,6 +26,7 @@ import {
   cheaperPct,
   evaluateGuess,
   formatCheckedDate,
+  formatRating,
   formatWon,
   maxStreak,
   outcomeOf,
@@ -59,6 +61,8 @@ const secondaryBtn =
 const bonusBtn =
   "flex h-14 w-full items-center justify-center rounded-2xl bg-amber-500 text-lg font-bold text-white transition active:scale-[0.98] active:bg-amber-500";
 const grayLink = "text-sm text-gray-400 underline underline-offset-2";
+const grayBorderBtn =
+  "flex h-11 w-full items-center justify-center rounded-2xl border border-gray-300 text-sm font-semibold text-gray-500 transition active:scale-[0.98] active:bg-gray-50";
 
 export function Game() {
   const reducedMotion = useReducedMotion();
@@ -345,6 +349,8 @@ function PlayScreen({
 
   const outcome = result ? outcomeOf(result) : null;
   const autoAdvance = outcome === "hit" || outcome === "miss";
+  const autoAdvanceMs = autoAdvance && product.selling_point ? AUTO_ADVANCE_WITH_REASON_MS : AUTO_ADVANCE_MS;
+  const showSellingPoint = stage === "input" && product.tier === "hard" && !!product.selling_point;
 
   function submit() {
     if (stage !== "input" || value <= 0) return;
@@ -366,9 +372,9 @@ function PlayScreen({
 
   useEffect(() => {
     if (stage !== "reveal" || !autoAdvance || autoCancelled) return;
-    const t = setTimeout(onNext, AUTO_ADVANCE_MS);
+    const t = setTimeout(onNext, autoAdvanceMs);
     return () => clearTimeout(t);
-  }, [stage, autoAdvance, autoCancelled, onNext]);
+  }, [stage, autoAdvance, autoAdvanceMs, autoCancelled, onNext]);
 
   return (
     <div className="flex flex-col">
@@ -379,11 +385,20 @@ function PlayScreen({
           </span>
         </div>
       )}
-      <div className="mx-auto" style={{ width: "min(100%, max(96px, calc(100dvh - 520px)))" }}>
+      <div
+        className="mx-auto"
+        style={{ width: `min(100%, max(96px, calc(100dvh - ${showSellingPoint ? 566 : 520}px)))` }}
+      >
         <ProductImage src={product.image_url} alt={product.name} priority sizes="(max-width: 448px) 60vw, 280px" />
       </div>
       <h2 className="mt-3 text-center text-lg font-bold leading-snug">{product.name}</h2>
       {stage === "input" && <p className="mt-0.5 text-center text-sm text-gray-500">{product.description}</p>}
+      {showSellingPoint && (
+        <div className="mx-auto mt-1.5 max-w-full rounded-xl bg-gray-50 px-3 py-1.5 text-center text-xs text-gray-600">
+          <span className="mr-1 font-bold text-gray-400">{COPY.sellingPointLabel}</span>
+          {product.selling_point}
+        </div>
+      )}
 
       <div className="mt-2 flex h-11 items-end justify-center">
         {stage === "input" ? (
@@ -457,6 +472,7 @@ function PlayScreen({
           outcome={outcome}
           isLast={isLast}
           autoCancelled={autoCancelled}
+          autoAdvanceMs={autoAdvanceMs}
           onCancelAuto={() => setAutoCancelled(true)}
           onNext={onNext}
         />
@@ -470,6 +486,7 @@ function Verdict({
   outcome,
   isLast,
   autoCancelled,
+  autoAdvanceMs,
   onCancelAuto,
   onNext,
 }: {
@@ -477,6 +494,7 @@ function Verdict({
   outcome: Outcome;
   isLast: boolean;
   autoCancelled: boolean;
+  autoAdvanceMs: number;
   onCancelAuto: () => void;
   onNext: () => void;
 }) {
@@ -495,15 +513,18 @@ function Verdict({
     miss: "text-gray-600",
   }[outcome];
   const bigCta = outcome === "hit_cheaper" || outcome === "cheaper";
+  const showReason = !bigCta && !!product.selling_point;
   const shippingNote =
     product.shipping === "rocket_threshold" || product.shipping === "seller_paid" ? COPY.shippingMaybe : COPY.shippingFree;
   const nextLabel = isLast ? "결과 보기" : "다음";
+  const hasRating = product.rating !== undefined && product.review_count !== undefined;
 
   return (
     <div className="mt-2 flex flex-col">
       <HideFooterDisclosure />
       <p className="text-center text-xs text-gray-400">
         {shippingNote} · 가격 확인: {formatCheckedDate(product.price_checked_at)}
+        {hasRating && <> · {formatRating(product.rating!, product.review_count!)}</>}
       </p>
       <p className={`mt-3 text-center text-2xl font-black ${headlineColor}`}>{headline}</p>
       <p className="mt-1 text-center text-sm text-gray-500">
@@ -525,11 +546,17 @@ function Verdict({
           <button type="button" className={primaryBtn} onClick={onNext}>
             {nextLabel}
           </button>
+          {showReason && (
+            <div className="mt-2 w-full rounded-xl bg-gray-50 px-3 py-2 text-center text-xs text-gray-600">
+              <p className="font-bold text-gray-500">{COPY.pricierReason}</p>
+              <p className="mt-0.5">{product.selling_point}</p>
+            </div>
+          )}
           <PartnerLink
             href={product.partner_url}
             productId={product.id}
             source="reveal_gray"
-            className={`${grayLink} mt-2 py-1`}
+            className={showReason ? `${grayBorderBtn} mt-2` : `${grayLink} mt-2 py-1`}
             onClick={onCancelAuto}
           >
             {COPY.buyAnyway}
@@ -540,7 +567,7 @@ function Verdict({
             <div className="fixed inset-x-0 bottom-0 z-30 h-1 bg-gray-100" aria-hidden>
               <div
                 className="h-full origin-left bg-gray-500"
-                style={{ animation: `nd-countdown ${AUTO_ADVANCE_MS}ms linear forwards` }}
+                style={{ animation: `nd-countdown ${autoAdvanceMs}ms linear forwards` }}
               />
             </div>
           )}
@@ -675,6 +702,9 @@ function ResultScreen({
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-semibold">{product.name}</p>
                   <p className="mt-0.5 text-lg font-black">{formatWon(product.price)}</p>
+                  {product.rating !== undefined && product.review_count !== undefined && (
+                    <p className="text-[11px] text-gray-400">{formatRating(product.rating, product.review_count)}</p>
+                  )}
                   <p className="text-xs text-blue-600">예상보다 {cheaperPct(guess, product.price)}% 저렴</p>
                 </div>
                 <PartnerLink
@@ -704,7 +734,12 @@ function ResultScreen({
                   <ProductImage src={product.image_url} alt={product.name} sizes="40px" className="rounded-lg" />
                 </div>
                 <p className="min-w-0 flex-1 truncate text-sm text-gray-700">{product.name}</p>
-                <span className="text-sm font-semibold tabular-nums text-gray-700">{formatWon(product.price)}</span>
+                <div className="flex shrink-0 flex-col items-end">
+                  <span className="text-sm font-semibold tabular-nums text-gray-700">{formatWon(product.price)}</span>
+                  {product.rating !== undefined && product.review_count !== undefined && (
+                    <span className="text-[10px] text-gray-400">{formatRating(product.rating, product.review_count)}</span>
+                  )}
+                </div>
                 <PartnerLink
                   href={product.partner_url}
                   productId={product.id}

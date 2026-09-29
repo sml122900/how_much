@@ -134,3 +134,14 @@ export function formatCheckedDate(ymd: string): string {
   const [, m, d] = ymd.split("-").map(Number);
   return `${m}월 ${d}일`;
 }
+
+/** 29373 → "2.9만", 320 → "320" */
+export function formatReviewCount(n: number): string {
+  if (n >= 10_000) return `${(n / 10_000).toFixed(1)}만`;
+  return n.toLocaleString("ko-KR");
+}
+
+/** "★4.5 · 리뷰 2.9만" */
+export function formatRating(rating: number, reviewCount: number): string {
+  return `★${rating.toFixed(1)} · 리뷰 ${formatReviewCount(reviewCount)}`;
+}

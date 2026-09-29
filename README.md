@@ -78,6 +78,9 @@ npm run dev              # http://localhost:3000
 | `options` | `single`(단일 옵션) / `default`(다중 옵션이면 링크가 그 옵션으로 열리고 그 옵션 가격을 적음) |
 | `shipping` | `rocket_free` / `rocket_threshold` / `seller_free` / `seller_paid` |
 | `tier` | 비우면 `normal`. `hard`면 보너스 라운드 전용 풀에 들어감 (아래 참고) |
+| `selling_point` | (선택) 강점 한 줄, 40자 이내. `tier=hard` 상품만 문제 화면에 자동 표시됨 (아래 참고) |
+| `rating` | (선택) 별점 0~5, 소수점 한 자리. `review_count` 와 둘 다 있거나 둘 다 비워야 함 |
+| `review_count` | (선택) 리뷰 수(정수). `rating` 과 세트 |
 
 `shipping` 이 `rocket_threshold`(로켓배송 19,800원 미만 → 비회원 배송비) 또는 `seller_paid` 이면
 공개 화면 실제가 아래에 "배송비 별도일 수 있음", 나머지는 "무료배송"이 표시된다.
@@ -93,6 +96,8 @@ npm run dev              # http://localhost:3000
 - [ ] 배송 조건을 확인해 `shipping` 을 정확히 적는다
 - [ ] 가격의 일의 자리가 0이 아닌 상품(예: 12,345원)은 드럼으로 맞힐 수 없으니 제외한다
 - [ ] `price_checked_at` 을 확인한 날로 적는다
+- [ ] `selling_point` 를 적을 땐: 가격 힌트 단어(싸다/저렴/가성비/할인/최저가) 금지, 1인칭 후기 표현(써보니/사용해보니/제가/직접 써) 금지 — 써보지 않은 상품을 써본 것처럼 쓰지 않는다. 상세 페이지의 사실(소재·기능·구성)만 요약
+- [ ] `rating`·`review_count` 는 가격과 같은 시점에 확인한 값으로 취급한다 (별도 날짜 컬럼 없음, `price_checked_at` 14일 규칙을 그대로 따름)
 
 ### 하드 풀 (`tier=hard`) 큐레이션
 
@@ -101,6 +106,7 @@ npm run dev              # http://localhost:3000
 
 - [ ] **드럼 상한은 999,990원**이다. "고가"라도 이 범위 안에서 고른다 (예: 100만 원대 가전은 제외)
 - [ ] 최소 5개 이상 등록해야 보너스 라운드가 열린다 (`BONUS_ROUND_SIZE`, `lib/config.ts`)
+- `selling_point` 를 채우면 문제 화면(가격 입력 전)에 강점 한 줄이 자동으로 표시된다. `normal` 상품은 채워도 표시되지 않는다(순수 눈대중 유지)
 
 ### 순서
 

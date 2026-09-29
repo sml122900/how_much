@@ -11,6 +11,10 @@ export const COPY = {
   buyAnyway: "그래도 구매할래요",
   viewAtStore: "쿠팡에서 보기",
 
+  // 강점·별점 (hard 상품 문제 화면 + MISS/HIT만 공개 화면)
+  sellingPointLabel: "특징",
+  pricierReason: "비싼 데는 이유가 있어요",
+
   // 배송
   shippingMaybe: "배송비 별도일 수 있음",
   shippingFree: "무료배송",
