@@ -4,7 +4,7 @@
  *   npm run verify:supabase
  *
  * 확인하는 것:
- *   1) guesses / clicks / milestones 테이블과 필요한 컬럼(round_type, reward 포함)이 있는지
+ *   1) guesses / clicks / milestones 테이블과 필요한 컬럼(round_type, reward, utm_source·utm_campaign 포함)이 있는지
  *   2) 테이블마다 테스트 row 하나를 insert → select → delete 해서 실제로 쓰고 읽을 수 있는지
  *   3) (NEXT_PUBLIC_SUPABASE_ANON_KEY 가 있으면) anon key로는 insert가 막히는지 — RLS 검증
  *
@@ -56,9 +56,11 @@ const TABLE_COLUMNS: Record<string, string[]> = {
     "is_cheaper",
     "error_pct",
     "round_type",
+    "utm_source",
+    "utm_campaign",
     "created_at",
   ],
-  clicks: ["id", "session_id", "product_id", "source", "created_at"],
+  clicks: ["id", "session_id", "product_id", "source", "utm_source", "utm_campaign", "created_at"],
   milestones: ["id", "session_id", "streak", "reward", "created_at"],
 };
 

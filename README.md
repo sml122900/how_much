@@ -127,9 +127,10 @@ env가 없으면 `/api/log` 는 204만 반환하고 아무것도 저장하지 �
 
 1. Supabase 프로젝트 생성
 2. SQL Editor에서 `supabase/all_migrations.sql` 을 실행한다
-   (`supabase/migrations/` 의 3개 파일을 순서대로 이어붙인 것뿐, 개별 파일을 `supabase db push` 로 적용해도 된다)
+   (`supabase/migrations/` 의 4개 파일을 순서대로 이어붙인 것뿐, 개별 파일을 `supabase db push` 로 적용해도 된다)
    - `guesses`(round_type: `main` / `bonus`), `clicks`(source: `reveal` / `reveal_gray` / `result` / `result_rest`),
      `milestones`(reward: `title` / `bonus_unlock` / `ad_free`)
+   - `guesses`·`clicks` 의 `utm_source`·`utm_campaign`: 홍보 채널 유입 (아래 "6. 홍보 자동화" 참고, 직접 방문은 null)
    - RLS 활성화, anon 정책 없음 → 클라이언트에서 직접 접근 불가
 3. env 설정 (`.env.local` 또는 Vercel):
 
@@ -185,6 +186,74 @@ NEXT_PUBLIC_AD_SLOT_RESULT=2222222222      # 결과 화면 하단, 이득 목록
 **내가 검토 필요**: 특히 `/privacy` 의 문의 이메일 자리표시자(`[문의 이메일 주소를 여기에 적어주세요]`)와
 사업자 정보, 실제 광고 게재 여부에 맞는 문구를 직접 확인·수정할 것.
 
+## 6. 홍보 자동화 (쇼츠 영상 · 캡션 · UTM)
+
+원칙: **AI가 만들고 사람이 승인**한다. 영상·글에는 파트너스 링크·구매 버튼·대가성 문구 없이 **사이트 주소만** 넣는다.
+SNS 자동 게시는 아직 없다(수동 게시). 게임 본체는 이 기능들과 무관하게 그대로다.
+
+### 쇼츠 영상 (`/dev/shorts` → `npm run render:shorts`)
+
+- 녹화 화면: `/dev/shorts?id=p007&format=reveal` (dev 서버 전용, 프로덕션 404). 9:16 프레임을 그대로 미리볼 수 있다(▶ 재생)
+  - 시퀀스: 상품 이미지+상품명+훅 문구 1.5초 → 3·2·1(각 0.7초) → 게임과 같은 공개 스핀(전부 0에서 시작) → 확정 후 1.5초 → 사이트 주소 카드 2초
+  - 프레임 하단에 "가격: M월 D일 기준"(`price_checked_at`)
+  - 문구: 기본값은 `lib/copy.ts` 의 `shortsHook`·`shortsOutro`, 쿼리 `hook`·`outro` 로 덮어쓰기 (줄바꿈은 `\n`)
+- 렌더: `npm run dev` 를 켜둔 채로 다른 터미널에서
+
+```bash
+npx playwright install chromium --only-shell        # 처음 한 번 (헤드리스 브라우저)
+npm run render:shorts -- p007                        # → out/shorts/p007-reveal-YYYYMMDD.mp4
+npm run render:shorts -- p007 p012 p019              # 여러 개
+npm run render:shorts -- p007 --hook "이거 얼마?" --outro "맞혀보세요"
+SHORTS_BASE_URL=http://localhost:3001 npm run render:shorts -- p007   # dev 서버가 다른 포트일 때
+```
+
+- 결과: 1080×1920, 30fps, H.264(yuv420p, BT.709) + AAC 48kHz 스테레오 효과음. 한 편 약 9.4초, 캡처 20~30초
+- 방식: 헤드리스 Chromium이 `/dev/shorts` 를 **가상 시계**로 돌린다(`scripts/shorts/capture-runtime.js`).
+  60Hz 틱 2번 → 스크린샷 1장을 반복하므로 캡처 속도와 무관하게 프레임 드랍이 없고, 스핀은 60Hz 폰에서 도는 게임과 같은 코드·타이밍이다
+  (실측: 게임 2.25초 vs 영상 2.23초, 5자리 가격). 효과음은 `lib/sfx.ts` 가 같은 가상 시각에 예약한 소리를 OfflineAudioContext로
+  그대로 렌더해 합친다(겹쳐서 클리핑되면 트랙 전체를 -1 dBFS로 낮춤). 인코딩은 `ffmpeg-static`
+- 가격 확인일이 7일 넘은 상품은 렌더·캡션 생성 때 경고가 뜬다 (영상에 옛날 가격이 나가지 않게)
+
+### 캡션 초안 (`npm run captions`)
+
+```bash
+npm run captions -- p007              # → content/queue/p007-YYYYMMDD.json (status: "draft")
+npm run captions -- p007 p012
+npm run captions -- p007 --force      # 오늘 만든 draft 다시 만들기 (approved/posted 는 절대 안 덮음)
+npm run captions -- p007 --dry-run    # API 호출 없이 프롬프트만 출력
+```
+
+- `.env.local` 에 `ANTHROPIC_API_KEY`(워크스페이스용 키. 워크스페이스에 묶이지 않은 키면 `ANTHROPIC_WORKSPACE_ID` 도)와 `NEXT_PUBLIC_SITE_URL`
+- 모델: `claude-opus-5-5`. 입력은 상품 데이터(name, description, price, selling_point, rating, price_checked_at) + 톤 가이드 + 최근 캡션 5개
+- 출력: `youtube{title,description}`, `instagram{caption,hashtags}`, `tiktok{caption,hashtags}`, `threads{body,reply}`, `x{body,reply}`,
+  플랫폼마다 `link`(UTM 링크), `checks{price,price_checked_at}`(사람 확인용), `warnings`
+- 링크: 모델은 `{link}` 자리표시자만 쓰고, 코드가 `?utm_source={youtube|instagram|tiktok|threads|x}&utm_medium=social&utm_campaign={id}-{YYYYMMDD}` 링크로 바꿔 넣는다.
+  링크가 들어가는 곳은 youtube 설명, threads·x 답글 (인스타·틱톡 캡션은 링크가 안 눌려서 "프로필 링크" 안내 + `link` 필드를 프로필/스티커에 사용)
+- **코드로 검사하는 규칙** (`scripts/captions.ts`, 어기면 이유를 붙여 다시 쓰게 하고 3번 안에 통과 못 하면 파일을 만들지 않음):
+  URL·쇼핑몰 이름 직접 쓰기 금지 / youtube 제목 외 모든 캡션에 "가격은 M월 D일 기준" / 가격은 threads·x 답글에서만 공개(질문형 본문·영상 캡션엔 금액·힌트 없음) /
+  사용 후기 표현("써보니", "제가 사용해본" …)·과장 표현("역대급", "무조건", "최저가" …) 금지 / youtube 제목 40자, X 가중 280자 등 길이 / 해시태그 개수
+- 톤 가이드 **`content/voice.md` 는 초안이다 — 내가 직접 수정할 것.** 말투·예시·피할 것을 자유롭게 바꿔도 되고, 위 하드 규칙은 코드에 있어서 풀리지 않는다
+
+### 승인 흐름 (`npm run queue`)
+
+- `content/queue/*.json` 의 `status` 를 직접 고친다: `"draft"` → (내용 확인·수정 후) `"approved"` → (게시 후) `"posted"`
+- `npm run queue` → id · 상품 · status · 생성일 · 가격 확인일 표 (가격 확인 7일 초과는 ⚠)
+- 게시 직전에 `checks.price` 가 지금도 맞는지 한 번 더 볼 것
+
+### UTM 유입 추적
+
+- 첫 방문 URL의 `utm_source`·`utm_medium`·`utm_campaign` 을 sessionStorage(`hm_utm`)에 저장 (`components/UtmCapture.tsx`, `lib/utm.ts`).
+  새 UTM 링크로 다시 들어오면 새 값으로 바뀌고, UTM 없이 들어오면 기존 값 유지
+- `guesses`·`clicks` 로그에 `utm_source`·`utm_campaign` 을 같이 저장. 없으면 null(= 직접 방문). 게임 화면엔 아무것도 표시하지 않는다
+- 마이그레이션: `supabase/migrations/20260930000000_utm_tracking.sql` (all_migrations.sql 에도 포함). 적용 전 DB에 배포돼도
+  `/api/log` 가 utm 컬럼만 빼고 저장하므로 로그는 유실되지 않는다(서버 로그에 경고)
+- 채널별 집계 예시 (SQL Editor):
+
+```sql
+select coalesce(utm_source, '(직접)') as source, utm_campaign, count(distinct session_id) as players, count(*) as guesses
+from guesses group by 1, 2 order by players desc;
+```
+
 ## 입력 드럼 · 공개 연출
 
 `components/PriceDrum.tsx` 하나가 입력(`input`)·스핀(`spin`)·공개(`reveal`)를 담당한다.
@@ -192,8 +261,9 @@ NEXT_PUBLIC_AD_SLOT_RESULT=2222222222      # 결과 화면 하단, 이득 목록
 - 십만~십 5칸 + 고정 "0". 포인터 드래그(관성 + 스프링 스냅, 살짝 오버슛), 칸 탭(위 −1 / 아래 +1), 휠, 방향키
 - 숫자가 넘어갈 때마다 틱 소리 + `navigator.vibrate(8)` (지원 브라우저)
 - 드럼 아래 "직접 입력" → 숫자 입력칸 (10원 단위로 내림)
-- 공개 타임라인: 잠금 150ms → 스핀 500ms → 왼쪽부터 180ms 간격 정지(120ms 착지).
-  실제가 앞자리 0 칸은 스핀 전에 접는다. 제출 → 마지막 정지 = 4자리 가격 약 1.14초, 5자리 약 1.32초, 6자리 약 1.50초
+- 공개 타임라인(한 자리씩 순차): 자리마다 윈드업 50ms → 풀스피드 250ms → 감속 120ms, 앞 자리가 정착을 시작하는 순간
+  다음 자리가 돈다. 마지막 자리만 3칸 애태우기(칸당 140ms) 뒤 정착. 실제가 앞자리 0 칸은 스핀 전에 접는다.
+  제출 → 마지막 정지(60Hz 실측) = 4자리 가격 약 1.83초, 5자리 약 2.25초, 6자리 약 2.67초
 - `prefers-reduced-motion` 이면 스핀·펀치·흔들림·폭죽 없이 페이드 공개 (소리는 음소거 토글만 따름)
 - 우측 상단 🔊/🔇 음소거 토글 (localStorage `nd_muted`, 기본 ON). 음소거 시 오디오 소스를 아예 만들지 않는다
 
@@ -245,6 +315,14 @@ lib/storage.ts             localStorage (session_id, best streak, seen)
 scripts/build-products.ts  CSV 검증 → products.json
 scripts/verify-supabase.ts Supabase 스키마·읽기/쓰기·RLS 확인 (npm run verify:supabase)
 scripts/preflight.ts       배포 전 점검 + npm run build (npm run preflight)
+app/dev/shorts/            쇼츠 녹화 9:16 프레임 (dev 전용)
+scripts/render-shorts.ts   /dev/shorts 캡처 → mp4 (npm run render:shorts)
+scripts/shorts/capture-runtime.js 렌더러가 페이지에 주입하는 가상 시계 + 오프라인 오디오
+scripts/captions.ts        캡션 초안 생성 (npm run captions)
+scripts/queue.ts           캡션 대기열 표 (npm run queue)
+content/voice.md           캡션 톤 가이드 (직접 수정)
+content/queue/             캡션 초안 JSON (draft → approved → posted)
+lib/utm.ts                 UTM 저장·읽기·값 검증 (클라이언트·서버 공용)
 supabase/migrations/       SQL, 개별 적용용 (이름 순서대로)
 supabase/all_migrations.sql 위 파일들을 합친 것, SQL Editor에 한 번에 붙여넣을 때
 ```

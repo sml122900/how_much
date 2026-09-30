@@ -58,4 +58,6 @@ export const STORAGE_KEYS = {
   muted: "nd_muted",
   /** lib/entitlements.ts 에서 직접 참조 (ISO timestamp) */
   adFreeUntil: "hm_ad_free_until",
+  /** sessionStorage — 첫 방문 URL의 utm_* (lib/utm.ts) */
+  utm: "hm_utm",
 } as const;

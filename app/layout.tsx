@@ -3,6 +3,7 @@ import Link from "next/link";
 import { APP_NAME, APP_SUBCOPY, APP_TITLE } from "@/lib/config";
 import { FooterDisclosure } from "@/components/FooterDisclosure";
 import { FooterVisibilityProvider } from "@/components/FooterVisibility";
+import { UtmCapture } from "@/components/UtmCapture";
 import "./globals.css";
 
 const siteUrl =
@@ -38,6 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body className="bg-white font-sans text-gray-900 antialiased">
+        <UtmCapture />
         <FooterVisibilityProvider>
           <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5">
             <main className="flex flex-1 flex-col py-3">{children}</main>

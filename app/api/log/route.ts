@@ -3,6 +3,7 @@ import { MAX_PRICE } from "@/lib/config";
 import { evaluateGuess } from "@/lib/game";
 import { getProduct } from "@/lib/products";
 import type { ClickSource, RewardType, RoundType } from "@/lib/types";
+import { cleanUtmValue } from "@/lib/utm";
 
 export const runtime = "nodejs";
 
@@ -25,10 +26,18 @@ function supabase(): SupabaseClient | null {
 const noContent = () => new Response(null, { status: 204 });
 const bad = () => new Response(null, { status: 400 });
 
+const UTM_COLUMNS = ["utm_source", "utm_campaign"];
+
 async function insert(table: string, row: Record<string, unknown>) {
   const db = supabase();
   if (!db) return;
-  const { error } = await db.from(table).insert(row);
+  let { error } = await db.from(table).insert(row);
+  // utm 컬럼 마이그레이션(20260930000000_utm_tracking.sql) 전의 DB — 유입 정보만 빼고 로그는 남긴다
+  if (error?.code === "PGRST204" && UTM_COLUMNS.some((c) => error!.message.includes(`'${c}'`))) {
+    console.error(`[log] ${table}: utm 컬럼 없음 — supabase 마이그레이션을 적용하세요. utm 없이 저장`);
+    const rest = Object.fromEntries(Object.entries(row).filter(([k]) => !UTM_COLUMNS.includes(k)));
+    ({ error } = await db.from(table).insert(rest));
+  }
   if (error) console.error(`[log] ${table} insert failed:`, error.message);
 }
 
@@ -54,6 +63,8 @@ export async function POST(req: Request) {
 
   const product = typeof body.product_id === "string" ? getProduct(body.product_id) : undefined;
   if (!product) return bad();
+  // 형식이 이상한 utm 값은 요청을 거절하지 않고 null(직접 방문)로 저장
+  const utm = { utm_source: cleanUtmValue(body.utm_source), utm_campaign: cleanUtmValue(body.utm_campaign) };
 
   if (body.type === "guess") {
     const guess = body.guess;
@@ -71,13 +82,14 @@ export async function POST(req: Request) {
       is_cheaper: r.cheaper,
       error_pct: Math.round(r.errorPct * 100) / 100,
       round_type: roundType,
+      ...utm,
     });
     return noContent();
   }
 
   if (body.type === "click") {
     if (!CLICK_SOURCES.includes(body.source as ClickSource)) return bad();
-    await insert("clicks", { session_id: sessionId, product_id: product.id, source: body.source });
+    await insert("clicks", { session_id: sessionId, product_id: product.id, source: body.source, ...utm });
     return noContent();
   }
 

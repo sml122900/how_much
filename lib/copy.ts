@@ -44,4 +44,9 @@ export const COPY = {
   rewardsInfoTitleLine: "3·5·10·15연속 정답마다 칭호 획득",
   rewardsInfoBonusLine: "5연속이면 결과 화면에서 보너스 라운드에 도전할 수 있어요",
   rewardsInfoAdFreeLine: "10연속이면 광고 없는 24시간을 드려요",
+
+  // 쇼츠 녹화 화면 (/dev/shorts, 개발 전용). 쿼리 ?hook= / ?outro= 로 영상마다 덮어쓸 수 있다
+  shortsHook: "이거 얼마게요?",
+  shortsOutro: "당신의 가격 감은?\n10문제로 확인해보세요",
+  shortsPriceBasis: (date: string) => `가격: ${date} 기준`,
 } as const;
